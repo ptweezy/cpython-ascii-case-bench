@@ -1,0 +1,100 @@
+From 53e9307f7c0c322020072b03c93f16c324cc0575 Mon Sep 17 00:00:00 2001
+From: Parker Loflin <parker@cronstable.dev>
+Date: Mon, 2 Nov 2026 01:21:21 +0000
+Subject: [PATCH] gh-161155: Speed up ASCII lower() and upper() for str, bytes
+ and bytearray
+
+_Py_bytes_lower() and _Py_bytes_upper() now convert a machine word at a
+time (8 bytes on 64-bit platforms, 4 on 32-bit) with integer arithmetic,
+then convert the remaining bytes with the existing table loop.
+str.lower(), str.upper() and str.casefold() use these functions for ASCII
+strings, as do lower(), upper() and capitalize() on bytes and bytearray.
+---
+ ...-11-02-05-27-54.gh-issue-161155.xXLPBV.rst |  4 ++
+ Objects/bytes_methods.c                       | 43 +++++++++++++++++--
+ 2 files changed, 43 insertions(+), 4 deletions(-)
+ create mode 100644 Misc/NEWS.d/next/Core_and_Builtins/2026-11-02-05-27-54.gh-issue-161155.xXLPBV.rst
+
+diff --git a/Misc/NEWS.d/next/Core_and_Builtins/2026-11-02-05-27-54.gh-issue-161155.xXLPBV.rst b/Misc/NEWS.d/next/Core_and_Builtins/2026-11-02-05-27-54.gh-issue-161155.xXLPBV.rst
+new file mode 100644
+index 0000000..ba188f9
+--- /dev/null
++++ b/Misc/NEWS.d/next/Core_and_Builtins/2026-11-02-05-27-54.gh-issue-161155.xXLPBV.rst
+@@ -0,0 +1,4 @@
++Speed up :meth:`str.lower`, :meth:`str.upper` and :meth:`str.casefold` for
++ASCII strings, and :meth:`bytes.lower`, :meth:`bytes.upper` and their
++:class:`bytearray` counterparts, by converting a machine word at a time.
++Patch by Parker Loflin.
+diff --git a/Objects/bytes_methods.c b/Objects/bytes_methods.c
+index 414afeb..99b3b81 100644
+--- a/Objects/bytes_methods.c
++++ b/Objects/bytes_methods.c
+@@ -242,6 +242,26 @@ _Py_bytes_istitle(const char *cptr, Py_ssize_t len)
+ }
+ 
+ 
++/* Return 0x20 in each byte of the word x that is in the range
++   first..first+25 ('A'..'Z' or 'a'..'z'), and 0 in every other byte.
++   XOR-ing the result into x switches the case of exactly those letters.
++
++   For a byte b below 0x80, b + (0x80 - first) has its high bit set iff
++   b >= first, and b + (0x80 - first - 26) has its high bit set iff
++   b > first + 25.  The sums stay below 0x100, so nothing carries into the
++   next byte.  Bytes 0x80 and above are dropped by "& ~x".  Every step works
++   on each byte separately, so the result depends neither on byte order nor
++   on the size of size_t. */
++static inline size_t
++ascii_case_bits(size_t x, unsigned char first)
++{
++    const size_t ones = (size_t)-1 / 0xff;  /* 0x01 in every byte */
++    size_t b = x & (0x7f * ones);
++    size_t ge_first = b + (0x80 - first) * ones;
++    size_t gt_last = b + (0x80 - first - 26) * ones;
++    return (ge_first & ~gt_last & ~x & (0x80 * ones)) >> 2;
++}
++
+ PyDoc_STRVAR_shared(_Py_lower__doc__,
+ "B.lower() -> copy of B\n\
+ \n\
+@@ -250,9 +270,17 @@ Return a copy of B with all ASCII characters converted to lowercase.");
+ void
+ _Py_bytes_lower(char *result, const char *cptr, Py_ssize_t len)
+ {
+-    Py_ssize_t i;
++    Py_ssize_t i = 0;
+ 
+-    for (i = 0; i < len; i++) {
++    /* Convert a word (4 or 8 bytes) at a time, then finish the tail one
++       byte at a time. */
++    for (; i + SIZEOF_SIZE_T <= len; i += SIZEOF_SIZE_T) {
++        size_t x;
++        memcpy(&x, cptr + i, sizeof(x));
++        x ^= ascii_case_bits(x, 'A');
++        memcpy(result + i, &x, sizeof(x));
++    }
++    for (; i < len; i++) {
+         result[i] = Py_TOLOWER((unsigned char) cptr[i]);
+     }
+ }
+@@ -266,9 +294,16 @@ Return a copy of B with all ASCII characters converted to uppercase.");
+ void
+ _Py_bytes_upper(char *result, const char *cptr, Py_ssize_t len)
+ {
+-    Py_ssize_t i;
++    Py_ssize_t i = 0;
+ 
+-    for (i = 0; i < len; i++) {
++    /* Same as _Py_bytes_lower(), switching 'a'..'z' instead. */
++    for (; i + SIZEOF_SIZE_T <= len; i += SIZEOF_SIZE_T) {
++        size_t x;
++        memcpy(&x, cptr + i, sizeof(x));
++        x ^= ascii_case_bits(x, 'a');
++        memcpy(result + i, &x, sizeof(x));
++    }
++    for (; i < len; i++) {
+         result[i] = Py_TOUPPER((unsigned char) cptr[i]);
+     }
+ }
+-- 
+2.56.0.windows.3
+
