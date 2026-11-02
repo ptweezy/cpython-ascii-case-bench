@@ -1,8 +1,10 @@
 name: variants
 
-# Release builds of main plus several variants of the change (patches in
-# variants/), checked and then timed side by side on each runner, with a
-# benchmark set focused on short strings.
+# Builds of main plus several variants of the change (patches in
+# variants/), checked and then timed side by side on each runner.  Build
+# types as in bench.yml: release, pgo (plus LTO on Linux and macOS) or
+# novec (Linux and macOS only).  The benchmark set is short (focused on
+# short strings) or full.
 
 on:
   workflow_dispatch:
@@ -13,6 +15,12 @@ on:
       runners:
         description: JSON list of runner labels
         default: '["ubuntu-24.04", "ubuntu-24.04-arm", "windows-2025", "windows-11-arm", "macos-15", "macos-15-intel"]'
+      build:
+        description: release, pgo or novec
+        default: release
+      bench_set:
+        description: short or full
+        default: short
 
 permissions:
   contents: read
@@ -22,9 +30,9 @@ env:
 
 jobs:
   bench:
-    name: ${{ matrix.os }} / run ${{ matrix.rep }}
+    name: ${{ matrix.os }} / ${{ inputs.build || 'release' }} / run ${{ matrix.rep }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 240
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
@@ -32,10 +40,10 @@ jobs:
         rep: [1, 2]
     env:
       BENCH_RUNNER: ${{ matrix.os }}
-      BENCH_BUILD: release
+      BENCH_BUILD: ${{ inputs.build || 'release' }}
       BENCH_REP: ${{ matrix.rep }}
       BENCH_PROCS: "10"
-      BENCH_SET: short
+      BENCH_SET: ${{ inputs.bench_set || 'short' }}
       VARIANTS: ${{ inputs.variants || 'varA varC varD' }}
     steps:
       - uses: actions/checkout@v4
@@ -68,9 +76,16 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         run: |
+          args=(-q)
+          if [ "$BENCH_BUILD" = pgo ]; then args+=(--enable-optimizations --with-lto); fi
+          if [ "$BENCH_BUILD" = novec ]; then
+            if [ "$RUNNER_OS" = macOS ]; then args+=("CFLAGS=-fno-vectorize -fno-slp-vectorize")
+            else args+=("CFLAGS=-fno-tree-vectorize"); fi
+          fi
+          echo "configure ${args[*]}"
           jobs=$(getconf _NPROCESSORS_ONLN)
           for t in base $VARIANTS; do
-            if ! (cd $t && ./configure -q > ../configure-$t.log 2>&1 && make -j$jobs > ../make-$t.log 2>&1); then
+            if ! (cd $t && ./configure "${args[@]}" > ../configure-$t.log 2>&1 && make -j$jobs > ../make-$t.log 2>&1); then
               tail -n 60 configure-$t.log make-$t.log; exit 1
             fi
             echo "built $t"
@@ -81,8 +96,10 @@ jobs:
         shell: pwsh
         run: |
           $plat = if ($env:RUNNER_ARCH -eq 'ARM64') { 'ARM64' } else { 'x64' }
+          $opts = @()
+          if ($env:BENCH_BUILD -eq 'pgo') { $opts += '--pgo' }
           foreach ($t in @('base') + $env:VARIANTS.Split(' ')) {
-            & "$t\PCbuild\build.bat" -p $plat -c Release --no-tkinter *> "build-$t.log"
+            & "$t\PCbuild\build.bat" -p $plat -c Release --no-tkinter @opts *> "build-$t.log"
             if ($LASTEXITCODE -ne 0) { Get-Content "build-$t.log" -Tail 60; exit 1 }
             "built $t"
           }
@@ -108,7 +125,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: variants-${{ matrix.os }}-${{ matrix.rep }}
+          name: variants-${{ matrix.os }}-${{ inputs.build || 'release' }}-${{ matrix.rep }}
           path: |
             results/
             *.log

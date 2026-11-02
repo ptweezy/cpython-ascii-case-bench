@@ -15,7 +15,7 @@ The matrix covers Linux, Windows and macOS on x86-64 and arm64, each with a plai
 gh workflow run bench.yml
 ```
 
-The `variants` workflow compares several versions of the change (the patches in `variants/`) against `main` on each runner, using release builds and a benchmark set focused on short strings:
+The `variants` workflow compares several versions of the change (the patches in `variants/`) against `main` on each runner. Its `build` input picks release, pgo or novec builds (as in `bench`), and `bench_set` picks the short-string set or the full one:
 
 - `varA` is the change as proposed.
 - `varC` moves the word loop into one helper marked `Py_NO_INLINE`, which the lower and upper functions call only for strings of at least one word.
@@ -24,6 +24,7 @@ The `variants` workflow compares several versions of the change (the patches in 
 - `varG` keeps the existing byte loops unchanged for short strings. For strings of at least a word, it calls one shared `Py_NO_INLINE` helper (a tail call) that converts whole words, the last one overlapping the one before it. `variants/gcheck_G.c` checks it against a per-byte reference.
 - `varF` is `varG` with the helper left `static inline`.
 - `varG2` is `varG` with the two small helpers marked `Py_ALWAYS_INLINE`. Without it, gcc's PGO+LTO build treats the word helper as cold (the PGO training doesn't reach it) and calls the per-word function instead of inlining it (1.4x instead of 2.1x at 1,024 characters locally); MSVC's PGO build loses some too (1.9x instead of 2.3x). Normal builds compile to the same code as `varG`.
+- `varH` is `varG2` with the word loop counting words (indexing an array-of-words type) and its two constants computed before the loop, so MSVC vectorizes it; the word count is unsigned so size-optimized builds don't use a division.
 
 ```
 gh workflow run variants.yml
