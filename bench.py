@@ -96,6 +96,8 @@ def main():
     }
     for name, py in builds:
         meta[f"{name}_version"] = run([py, "-c", "import sys; print(sys.version)"])
+        meta[f"{name}_cflags"] = run([py, "-c", "import sysconfig; "
+                                      "print(sysconfig.get_config_var('CFLAGS'))"])
     print(json.dumps(meta, indent=2), flush=True)
     with open(os.path.join(out, "meta.json"), "w") as f:
         json.dump(meta, f, indent=2)

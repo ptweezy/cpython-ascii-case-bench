@@ -1,18 +1,22 @@
-From 53e9307f7c0c322020072b03c93f16c324cc0575 Mon Sep 17 00:00:00 2001
+From f44bb5d6aa1607c829bc90e8ecccaff23dd3bb69 Mon Sep 17 00:00:00 2001
 From: Parker Loflin <parker@cronstable.dev>
 Date: Mon, 2 Nov 2026 01:21:21 +0000
 Subject: [PATCH] gh-161155: Speed up ASCII lower() and upper() for str, bytes
  and bytearray
 
-_Py_bytes_lower() and _Py_bytes_upper() now convert a machine word at a
-time (8 bytes on 64-bit platforms, 4 on 32-bit) with integer arithmetic,
-then convert the remaining bytes with the existing table loop.
-str.lower(), str.upper() and str.casefold() use these functions for ASCII
-strings, as do lower(), upper() and capitalize() on bytes and bytearray.
+_Py_bytes_lower() and _Py_bytes_upper() now convert strings of at least
+one machine word (8 bytes on 64-bit platforms, 4 on 32-bit) a word at a
+time with integer arithmetic.  When the length is not a multiple of the
+word size, the last word overlaps the one before it.  Shorter strings
+still take the existing table loop.
+
+str.lower(), str.upper() and str.casefold() use these functions for
+ASCII strings, as do lower(), upper() and capitalize() on bytes and
+bytearray.
 ---
  ...-11-02-05-27-54.gh-issue-161155.xXLPBV.rst |  4 ++
- Objects/bytes_methods.c                       | 43 +++++++++++++++++--
- 2 files changed, 43 insertions(+), 4 deletions(-)
+ Objects/bytes_methods.c                       | 54 +++++++++++++++++++
+ 2 files changed, 58 insertions(+)
  create mode 100644 Misc/NEWS.d/next/Core_and_Builtins/2026-11-02-05-27-54.gh-issue-161155.xXLPBV.rst
 
 diff --git a/Misc/NEWS.d/next/Core_and_Builtins/2026-11-02-05-27-54.gh-issue-161155.xXLPBV.rst b/Misc/NEWS.d/next/Core_and_Builtins/2026-11-02-05-27-54.gh-issue-161155.xXLPBV.rst
@@ -26,10 +30,10 @@ index 0000000..ba188f9
 +:class:`bytearray` counterparts, by converting a machine word at a time.
 +Patch by Parker Loflin.
 diff --git a/Objects/bytes_methods.c b/Objects/bytes_methods.c
-index 414afeb..99b3b81 100644
+index 414afeb..35b4d96 100644
 --- a/Objects/bytes_methods.c
 +++ b/Objects/bytes_methods.c
-@@ -242,6 +242,26 @@ _Py_bytes_istitle(const char *cptr, Py_ssize_t len)
+@@ -242,6 +242,52 @@ _Py_bytes_istitle(const char *cptr, Py_ssize_t len)
  }
  
  
@@ -53,48 +57,57 @@ index 414afeb..99b3b81 100644
 +    return (ge_first & ~gt_last & ~x & (0x80 * ones)) >> 2;
 +}
 +
++/* Convert the word at cptr + i into result + i. */
++static inline void
++ascii_case_word(char *result, const char *cptr, Py_ssize_t i,
++                unsigned char first)
++{
++    size_t x;
++    memcpy(&x, cptr + i, sizeof(x));
++    x ^= ascii_case_bits(x, first);
++    memcpy(result + i, &x, sizeof(x));
++}
++
++/* Convert len >= SIZEOF_SIZE_T bytes a word at a time.  If len is not a
++   multiple of the word size, the last word overlaps the one before it;
++   converting a byte twice gives the same result as converting it once.
++   Kept out of line so that short strings don't pay for its setup. */
++static Py_NO_INLINE void
++ascii_case_words(char *result, const char *cptr, Py_ssize_t len,
++                 unsigned char first)
++{
++    Py_ssize_t i;
++    for (i = 0; i < len - SIZEOF_SIZE_T; i += SIZEOF_SIZE_T) {
++        ascii_case_word(result, cptr, i, first);
++    }
++    ascii_case_word(result, cptr, len - SIZEOF_SIZE_T, first);
++}
++
  PyDoc_STRVAR_shared(_Py_lower__doc__,
  "B.lower() -> copy of B\n\
  \n\
-@@ -250,9 +270,17 @@ Return a copy of B with all ASCII characters converted to lowercase.");
- void
- _Py_bytes_lower(char *result, const char *cptr, Py_ssize_t len)
+@@ -252,6 +298,10 @@ _Py_bytes_lower(char *result, const char *cptr, Py_ssize_t len)
  {
--    Py_ssize_t i;
-+    Py_ssize_t i = 0;
+     Py_ssize_t i;
  
--    for (i = 0; i < len; i++) {
-+    /* Convert a word (4 or 8 bytes) at a time, then finish the tail one
-+       byte at a time. */
-+    for (; i + SIZEOF_SIZE_T <= len; i += SIZEOF_SIZE_T) {
-+        size_t x;
-+        memcpy(&x, cptr + i, sizeof(x));
-+        x ^= ascii_case_bits(x, 'A');
-+        memcpy(result + i, &x, sizeof(x));
++    if (len >= SIZEOF_SIZE_T) {
++        ascii_case_words(result, cptr, len, 'A');
++        return;
 +    }
-+    for (; i < len; i++) {
+     for (i = 0; i < len; i++) {
          result[i] = Py_TOLOWER((unsigned char) cptr[i]);
      }
- }
-@@ -266,9 +294,16 @@ Return a copy of B with all ASCII characters converted to uppercase.");
- void
- _Py_bytes_upper(char *result, const char *cptr, Py_ssize_t len)
+@@ -268,6 +318,10 @@ _Py_bytes_upper(char *result, const char *cptr, Py_ssize_t len)
  {
--    Py_ssize_t i;
-+    Py_ssize_t i = 0;
+     Py_ssize_t i;
  
--    for (i = 0; i < len; i++) {
-+    /* Same as _Py_bytes_lower(), switching 'a'..'z' instead. */
-+    for (; i + SIZEOF_SIZE_T <= len; i += SIZEOF_SIZE_T) {
-+        size_t x;
-+        memcpy(&x, cptr + i, sizeof(x));
-+        x ^= ascii_case_bits(x, 'a');
-+        memcpy(result + i, &x, sizeof(x));
++    if (len >= SIZEOF_SIZE_T) {
++        ascii_case_words(result, cptr, len, 'a');
++        return;
 +    }
-+    for (; i < len; i++) {
+     for (i = 0; i < len; i++) {
          result[i] = Py_TOUPPER((unsigned char) cptr[i]);
      }
- }
 -- 
 2.56.0.windows.3
 

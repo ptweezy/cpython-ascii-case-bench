@@ -2,7 +2,10 @@ name: bench
 
 # Builds CPython main (the parent of the gh-161155 commit) twice, once
 # unchanged and once with gh-161155.patch, checks the patched build, then
-# times both with pyperf on the same runner.
+# times both with pyperf on the same runner.  Build types: release (plain
+# ./configure or build.bat), pgo (PGO, plus LTO on Linux and macOS) and
+# novec (release with the compiler's auto-vectorizer turned off, for both
+# trees; Linux and macOS only, since MSVC doesn't vectorize this loop).
 
 on:
   workflow_dispatch:
@@ -26,8 +29,13 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04, ubuntu-24.04-arm, windows-2025, windows-11-arm, macos-15, macos-15-intel]
-        build: [release, pgo]
+        build: [release, pgo, novec]
         rep: [1, 2]
+        exclude:
+          - os: windows-2025
+            build: novec
+          - os: windows-11-arm
+            build: novec
     env:
       BENCH_RUNNER: ${{ matrix.os }}
       BENCH_BUILD: ${{ matrix.build }}
@@ -67,12 +75,17 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         run: |
-          opts=""
-          if [ "$BENCH_BUILD" = pgo ]; then opts="--enable-optimizations --with-lto"; fi
+          args=(-q)
+          if [ "$BENCH_BUILD" = pgo ]; then args+=(--enable-optimizations --with-lto); fi
+          if [ "$BENCH_BUILD" = novec ]; then
+            if [ "$RUNNER_OS" = macOS ]; then args+=("CFLAGS=-fno-vectorize -fno-slp-vectorize")
+            else args+=("CFLAGS=-fno-tree-vectorize"); fi
+          fi
+          echo "configure ${args[*]}"
           jobs=$(getconf _NPROCESSORS_ONLN)
           for t in base patched; do
             echo "::group::build $t ($BENCH_BUILD)"
-            if ! (cd $t && ./configure -q $opts > ../configure-$t.log 2>&1 && make -j$jobs > ../make-$t.log 2>&1); then
+            if ! (cd $t && ./configure "${args[@]}" > ../configure-$t.log 2>&1 && make -j$jobs > ../make-$t.log 2>&1); then
               tail -n 60 configure-$t.log make-$t.log; exit 1
             fi
             tail -n 5 make-$t.log
@@ -99,17 +112,25 @@ jobs:
           PP=$(python harness/bench.py --which patched)
           "$PB" -c "import sys; print('base:   ', sys.version)"
           "$PP" -c "import sys; print('patched:', sys.version)"
+          "$PP" -c "import sysconfig; print('CFLAGS:', sysconfig.get_config_var('CFLAGS'))"
           "$PP" -I harness/edge_cases.py
           "$PP" -m test test_str test_bytes test_userstring test_string -j0
 
-      - name: Exhaustive word check (cc)
+      - name: Vectorization check
+        if: runner.os != 'Windows'
+        shell: bash
+        continue-on-error: true
+        run: bash harness/vec_check.sh patched
+
+      - name: Word checks (cc)
         if: runner.os != 'Windows'
         shell: bash
         run: |
           cc --version | head -n 1
           for o in -O2 -O3; do cc $o -o wew harness/word_exhaustive_word.c && echo "cc $o: $(./wew)"; done
+          for o in -O2 -O3; do cc $o -o gck harness/variants/gcheck_G.c && echo "cc $o: $(./gck)"; done
 
-      - name: Exhaustive word check (MSVC)
+      - name: Word checks (MSVC)
         if: runner.os == 'Windows'
         shell: cmd
         run: |
@@ -118,6 +139,7 @@ jobs:
           for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath`) do set VSDIR=%%i
           call "%VSDIR%\VC\Auxiliary\Build\vcvarsall.bat" %VCARCH% > nul
           cl /nologo /O2 harness\word_exhaustive_word.c /Fewew.exe > nul && wew.exe
+          cl /nologo /O2 harness\variants\gcheck_G.c /Fegck.exe > nul && gck.exe
 
       - name: Benchmark
         shell: bash

@@ -6,7 +6,11 @@
 #include <string.h>
 typedef ptrdiff_t Py_ssize_t;
 #define SIZEOF_SIZE_T ((Py_ssize_t)sizeof(size_t))
+#ifdef _MSC_VER
+#define Py_NO_INLINE __declspec(noinline)
+#else
 #define Py_NO_INLINE __attribute__ ((noinline))
+#endif
 static unsigned char lo(unsigned char c){return (c>='A'&&c<='Z')?c+32:c;}
 static unsigned char up(unsigned char c){return (c>='a'&&c<='z')?c-32:c;}
 #define Py_TOLOWER(c) lo(c)
