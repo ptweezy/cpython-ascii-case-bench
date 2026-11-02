@@ -23,7 +23,7 @@ The `variants` workflow compares several versions of the change (the patches in 
 - `varE` is `varA` with an early return through the plain byte loop for strings shorter than a word.
 - `varG` keeps the existing byte loops unchanged for short strings. For strings of at least a word, it calls one shared `Py_NO_INLINE` helper (a tail call) that converts whole words, the last one overlapping the one before it. `variants/gcheck_G.c` checks it against a per-byte reference.
 - `varF` is `varG` with the helper left `static inline`.
-- `varG2` is `varG` with the two small helpers marked `Py_ALWAYS_INLINE`. Without it, gcc's PGO+LTO build treats the word helper as cold (the PGO training doesn't reach it) and calls the per-word function instead of inlining it, which halves the gain; MSVC's PGO build loses some too. Normal builds compile to the same code as `varG`.
+- `varG2` is `varG` with the two small helpers marked `Py_ALWAYS_INLINE`. Without it, gcc's PGO+LTO build treats the word helper as cold (the PGO training doesn't reach it) and calls the per-word function instead of inlining it (1.4x instead of 2.1x at 1,024 characters locally); MSVC's PGO build loses some too (1.9x instead of 2.3x). Normal builds compile to the same code as `varG`.
 
 ```
 gh workflow run variants.yml
