@@ -13,3 +13,13 @@ The matrix covers Linux, Windows and macOS on x86-64 and arm64, each with a plai
 ```
 gh workflow run bench.yml
 ```
+
+The `variants` workflow compares several versions of the change (the patches in `variants/`) against `main` on each runner, using release builds and a benchmark set focused on short strings:
+
+- `varA` is the change as proposed.
+- `varC` moves the word loop into one helper marked `Py_NO_INLINE`, which the lower and upper functions call only for strings of at least one word.
+- `varD` is the same helper as plain `static inline`.
+
+```
+gh workflow run variants.yml
+```

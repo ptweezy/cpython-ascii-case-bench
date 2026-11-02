@@ -1,0 +1,110 @@
+name: variants
+
+# Release builds of main plus several variants of the change (patches in
+# variants/), checked and then timed side by side on each runner, with a
+# benchmark set focused on short strings.
+
+on:
+  workflow_dispatch:
+    inputs:
+      variants:
+        description: patch names in variants/, without .patch
+        default: "varA varC varD"
+
+permissions:
+  contents: read
+
+env:
+  CPYTHON_BASE: 4e0677ac610d9e890503fc0c0ca8351bfdd5f000
+
+jobs:
+  bench:
+    name: ${{ matrix.os }} / run ${{ matrix.rep }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, windows-2025, windows-11-arm, macos-15, macos-15-intel]
+        rep: [1, 2]
+    env:
+      BENCH_RUNNER: ${{ matrix.os }}
+      BENCH_BUILD: release
+      BENCH_REP: ${{ matrix.rep }}
+      BENCH_PROCS: "10"
+      BENCH_SET: short
+      VARIANTS: ${{ inputs.variants || 'varA varC varD' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: harness
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: python/cpython
+          ref: ${{ env.CPYTHON_BASE }}
+          path: base
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Make variant trees
+        shell: bash
+        run: |
+          for v in $VARIANTS; do
+            cp -r base $v
+            git -C $v apply --cached ../harness/variants/$v.patch
+            git -C $v checkout -- .
+            git -C $v diff --cached --stat
+          done
+
+      - name: Build (Linux, macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          jobs=$(getconf _NPROCESSORS_ONLN)
+          for t in base $VARIANTS; do
+            if ! (cd $t && ./configure -q > ../configure-$t.log 2>&1 && make -j$jobs > ../make-$t.log 2>&1); then
+              tail -n 60 configure-$t.log make-$t.log; exit 1
+            fi
+            echo "built $t"
+          done
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $plat = if ($env:RUNNER_ARCH -eq 'ARM64') { 'ARM64' } else { 'x64' }
+          foreach ($t in @('base') + $env:VARIANTS.Split(' ')) {
+            & "$t\PCbuild\build.bat" -p $plat -c Release --no-tkinter *> "build-$t.log"
+            if ($LASTEXITCODE -ne 0) { Get-Content "build-$t.log" -Tail 60; exit 1 }
+            "built $t"
+          }
+
+      - name: Check each variant
+        shell: bash
+        run: |
+          for v in $VARIANTS; do
+            P=$(python harness/bench.py --which $v)
+            echo "== $v: $("$P" -c 'import sys; print(sys.version)')"
+            "$P" -I harness/edge_cases.py
+            "$P" -m test test_str test_bytes test_userstring test_string -j0 2>&1 | tail -n 4
+          done
+
+      - name: Benchmark
+        shell: bash
+        run: |
+          python -m pip install --quiet --no-deps --target pyperf-lib pyperf==2.10.0
+          specs="base=base"
+          for v in $VARIANTS; do specs="$specs $v=$v"; done
+          python harness/bench.py --multi results pyperf-lib $specs
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: variants-${{ matrix.os }}-${{ matrix.rep }}
+          path: |
+            results/
+            *.log
+          if-no-files-found: warn
