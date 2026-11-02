@@ -10,6 +10,9 @@ on:
       variants:
         description: patch names in variants/, without .patch
         default: "varA varC varD"
+      runners:
+        description: JSON list of runner labels
+        default: '["ubuntu-24.04", "ubuntu-24.04-arm", "windows-2025", "windows-11-arm", "macos-15", "macos-15-intel"]'
 
 permissions:
   contents: read
@@ -25,7 +28,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, ubuntu-24.04-arm, windows-2025, windows-11-arm, macos-15, macos-15-intel]
+        os: ${{ fromJSON(inputs.runners) }}
         rep: [1, 2]
     env:
       BENCH_RUNNER: ${{ matrix.os }}
@@ -51,9 +54,11 @@ jobs:
 
       - name: Make variant trees
         shell: bash
+        # A worktree checks out symlinks the same way as base (cp -r can't
+        # recreate some of them on the Windows ARM64 image).
         run: |
           for v in $VARIANTS; do
-            cp -r base $v
+            git -C base worktree add -q --detach ../$v HEAD
             git -C $v apply --cached ../harness/variants/$v.patch
             git -C $v checkout -- .
             git -C $v diff --cached --stat
