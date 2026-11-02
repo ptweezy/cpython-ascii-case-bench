@@ -1,4 +1,4 @@
-/* Variant G against a per-byte reference: lengths 0..80, offsets 0..15, random
+/* Variant G (with G2's Py_ALWAYS_INLINE) against a per-byte reference: lengths 0..80, offsets 0..15, random
    bytes (all 256 values), copying and in place, lower and upper. */
 #include <stddef.h>
 #include <stdio.h>
@@ -8,14 +8,16 @@ typedef ptrdiff_t Py_ssize_t;
 #define SIZEOF_SIZE_T ((Py_ssize_t)sizeof(size_t))
 #ifdef _MSC_VER
 #define Py_NO_INLINE __declspec(noinline)
+#define Py_ALWAYS_INLINE __forceinline
 #else
 #define Py_NO_INLINE __attribute__ ((noinline))
+#define Py_ALWAYS_INLINE __attribute__((always_inline))
 #endif
 static unsigned char lo(unsigned char c){return (c>='A'&&c<='Z')?c+32:c;}
 static unsigned char up(unsigned char c){return (c>='a'&&c<='z')?c-32:c;}
 #define Py_TOLOWER(c) lo(c)
 #define Py_TOUPPER(c) up(c)
-static inline size_t
+static inline Py_ALWAYS_INLINE size_t
 ascii_case_bits(size_t x, unsigned char first)
 {
     const size_t ones = (size_t)-1 / 0xff;  /* 0x01 in every byte */
@@ -25,7 +27,7 @@ ascii_case_bits(size_t x, unsigned char first)
     return (ge_first & ~gt_last & ~x & (0x80 * ones)) >> 2;
 }
 /* Convert the word at cptr + i into result + i. */
-static inline void
+static inline Py_ALWAYS_INLINE void
 ascii_case_word(char *result, const char *cptr, Py_ssize_t i,
                 unsigned char first)
 {

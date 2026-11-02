@@ -2,7 +2,7 @@
 
 Benchmarks for [python/cpython#161155](https://github.com/python/cpython/issues/161155), which speeds up ASCII `str.lower()`/`str.upper()` and `bytes.lower()`/`bytes.upper()` by converting a machine word at a time.
 
-The `bench` workflow builds CPython `main` at the patch's parent commit twice on each GitHub-hosted runner: once unchanged, once with `gh-161155.patch`. Since 2026-11-02 that patch is the overlapping-word version (`varG` below); the first version is `variants/varA.patch`. Then it:
+The `bench` workflow builds CPython `main` at the patch's parent commit twice on each GitHub-hosted runner: once unchanged, once with `gh-161155.patch`. Since 2026-11-02 that patch is the overlapping-word version (`varG2` below); the first version is `variants/varA.patch`. Then it:
 
 - runs `edge_cases.py` and `test_str`, `test_bytes`, `test_userstring` and `test_string` on the patched build;
 - compiles `word_exhaustive_word.c` and `variants/gcheck_G.c` with the runner's C compiler and checks the word-level conversion, and the whole functions at lengths 0 to 80, against a per-byte reference;
@@ -23,6 +23,7 @@ The `variants` workflow compares several versions of the change (the patches in 
 - `varE` is `varA` with an early return through the plain byte loop for strings shorter than a word.
 - `varG` keeps the existing byte loops unchanged for short strings. For strings of at least a word, it calls one shared `Py_NO_INLINE` helper (a tail call) that converts whole words, the last one overlapping the one before it. `variants/gcheck_G.c` checks it against a per-byte reference.
 - `varF` is `varG` with the helper left `static inline`.
+- `varG2` is `varG` with the two small helpers marked `Py_ALWAYS_INLINE`. Without it, gcc's PGO+LTO build treats the word helper as cold (the PGO training doesn't reach it) and calls the per-word function instead of inlining it, which halves the gain; MSVC's PGO build loses some too. Normal builds compile to the same code as `varG`.
 
 ```
 gh workflow run variants.yml

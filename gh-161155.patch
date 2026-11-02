@@ -1,4 +1,4 @@
-From f44bb5d6aa1607c829bc90e8ecccaff23dd3bb69 Mon Sep 17 00:00:00 2001
+From b4d59af15e67769e18c44af7763d8511baa4e754 Mon Sep 17 00:00:00 2001
 From: Parker Loflin <parker@cronstable.dev>
 Date: Mon, 2 Nov 2026 01:21:21 +0000
 Subject: [PATCH] gh-161155: Speed up ASCII lower() and upper() for str, bytes
@@ -30,7 +30,7 @@ index 0000000..ba188f9
 +:class:`bytearray` counterparts, by converting a machine word at a time.
 +Patch by Parker Loflin.
 diff --git a/Objects/bytes_methods.c b/Objects/bytes_methods.c
-index 414afeb..35b4d96 100644
+index 414afeb..0a247d6 100644
 --- a/Objects/bytes_methods.c
 +++ b/Objects/bytes_methods.c
 @@ -242,6 +242,52 @@ _Py_bytes_istitle(const char *cptr, Py_ssize_t len)
@@ -47,7 +47,7 @@ index 414afeb..35b4d96 100644
 +   next byte.  Bytes 0x80 and above are dropped by "& ~x".  Every step works
 +   on each byte separately, so the result depends neither on byte order nor
 +   on the size of size_t. */
-+static inline size_t
++static inline Py_ALWAYS_INLINE size_t
 +ascii_case_bits(size_t x, unsigned char first)
 +{
 +    const size_t ones = (size_t)-1 / 0xff;  /* 0x01 in every byte */
@@ -58,7 +58,7 @@ index 414afeb..35b4d96 100644
 +}
 +
 +/* Convert the word at cptr + i into result + i. */
-+static inline void
++static inline Py_ALWAYS_INLINE void
 +ascii_case_word(char *result, const char *cptr, Py_ssize_t i,
 +                unsigned char first)
 +{
