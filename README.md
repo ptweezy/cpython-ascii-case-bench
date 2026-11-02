@@ -19,6 +19,9 @@ The `variants` workflow compares several versions of the change (the patches in 
 - `varA` is the change as proposed.
 - `varC` moves the word loop into one helper marked `Py_NO_INLINE`, which the lower and upper functions call only for strings of at least one word.
 - `varD` is the same helper as plain `static inline`.
+- `varE` is `varA` with an early return through the plain byte loop for strings shorter than a word.
+- `varG` keeps the existing byte loops unchanged for short strings. For strings of at least a word, it calls one shared `Py_NO_INLINE` helper (a tail call) that converts whole words, the last one overlapping the one before it. `variants/gcheck_G.c` checks it against a per-byte reference.
+- `varF` is `varG` with the helper left `static inline`.
 
 ```
 gh workflow run variants.yml
