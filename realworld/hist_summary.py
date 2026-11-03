@@ -3,6 +3,7 @@ import glob, os, sys
 sys.path.insert(0, os.path.dirname(__file__))
 BUCKETS = [("0", 0, 0), ("1-7", 1, 7), ("8-15", 8, 15), ("16-63", 16, 63), ("64-1023", 64, 1023), ("1024+", 1024, 10**12)]
 hdir = sys.argv[1]
+sys.stdout.reconfigure(encoding="utf-8")
 print(f"| Workload | Calls | Median length | " + " | ".join(b[0] for b in BUCKETS) + " | Characters in 64+ |")
 print("|---|---|---|" + "---|" * len(BUCKETS) + "---|")
 for path in sorted(glob.glob(os.path.join(hdir, "hist_*.txt"))):
