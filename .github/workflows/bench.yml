@@ -114,6 +114,7 @@ jobs:
           "$PP" -c "import sys; print('patched:', sys.version)"
           "$PP" -c "import sysconfig; print('CFLAGS:', sysconfig.get_config_var('CFLAGS'))"
           "$PP" -I harness/edge_cases.py
+          "$PP" -I harness/check_all.py
           "$PP" -m test test_str test_bytes test_userstring test_string -j0
 
       - name: Vectorization check

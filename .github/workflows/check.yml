@@ -1,0 +1,122 @@
+name: check
+
+# Compile exact/check_exact.c against the PR's word helpers, copied verbatim
+# from Objects/bytes_methods.c with gh-161155.patch applied, and run it with
+# each runner's compilers, for both word loops (the MSVC one and the other).
+# Ubuntu also cross-compiles for 32-bit x86, 32-bit ARM and big-endian s390x
+# and PowerPC, run under QEMU.
+
+on:
+  workflow_dispatch:
+  push:
+    paths: ["exact/**", "gh-161155.patch", ".github/workflows/check.yml"]
+
+permissions:
+  contents: read
+
+env:
+  CPYTHON_BASE: 4e0677ac610d9e890503fc0c0ca8351bfdd5f000
+
+jobs:
+  unix:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: harness
+          persist-credentials: false
+      - name: PR's bytes_methods.c
+        shell: bash
+        run: |
+          mkdir -p cp/Objects
+          curl -fsSL "https://raw.githubusercontent.com/python/cpython/$CPYTHON_BASE/Objects/bytes_methods.c" \
+               -o cp/Objects/bytes_methods.c
+          (cd cp && git apply --include=Objects/bytes_methods.c ../harness/gh-161155.patch)
+          python3 harness/exact/extract.py cp/Objects/bytes_methods.c harness/exact/pr_helpers.h
+      - name: Cross compilers
+        if: matrix.os == 'ubuntu-24.04'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q gcc-multilib gcc-s390x-linux-gnu gcc-powerpc-linux-gnu \
+               gcc-arm-linux-gnueabihf qemu-user
+      - name: Check
+        shell: bash
+        working-directory: harness/exact
+        run: |
+          fail=0
+          run() {  # label, then compiler command; runner prefix in $EMU
+            if "${@:2}" -fno-strict-overflow -Wall -Wextra -Werror check_exact.c -o ce; then
+              printf '%-44s ' "$1"; $EMU ./ce || fail=1
+            else
+              echo "$1: compile failed"; fail=1
+            fi
+          }
+          for cc in gcc clang; do
+            command -v $cc > /dev/null || continue
+            for o in -O2 -O3; do
+              for cw in 0 1; do
+                EMU= run "$cc $o ($($cc -dumpmachine))" $cc $o -DCHECK_COUNT_WORDS=$cw
+              done
+            done
+          done
+          if [ "${{ matrix.os }}" = ubuntu-24.04 ]; then
+            for cw in 0 1; do
+              EMU= run "gcc -O2 -m32" gcc -O2 -m32 -DCHECK_COUNT_WORDS=$cw
+              EMU=qemu-s390x run "s390x-linux-gnu-gcc -O2 (big-endian)" \
+                  s390x-linux-gnu-gcc -O2 -static -DCHECK_COUNT_WORDS=$cw
+              EMU=qemu-ppc run "powerpc-linux-gnu-gcc -O2 (big-endian, 32-bit)" \
+                  powerpc-linux-gnu-gcc -O2 -static -DCHECK_COUNT_WORDS=$cw
+              EMU=qemu-arm run "arm-linux-gnueabihf-gcc -O2 (32-bit)" \
+                  arm-linux-gnueabihf-gcc -O2 -static -DCHECK_COUNT_WORDS=$cw
+            done
+          fi
+          exit $fail
+
+  windows:
+    name: ${{ matrix.os }} ${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: windows-2025, arch: x64}
+          - {os: windows-2025, arch: x86}
+          - {os: windows-11-arm, arch: arm64}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: harness
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: PR's bytes_methods.c
+        shell: bash
+        run: |
+          mkdir -p cp/Objects
+          curl -fsSL "https://raw.githubusercontent.com/python/cpython/$CPYTHON_BASE/Objects/bytes_methods.c" \
+               -o cp/Objects/bytes_methods.c
+          (cd cp && git apply --include=Objects/bytes_methods.c ../harness/gh-161155.patch)
+          python harness/exact/extract.py cp/Objects/bytes_methods.c harness/exact/pr_helpers.h
+      - name: Check
+        shell: cmd
+        working-directory: harness\exact
+        run: |
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath`) do set VS=%%i
+          call "%VS%\VC\Auxiliary\Build\vcvarsall.bat" ${{ matrix.arch }} > nul || exit /b 1
+          set fail=0
+          for %%o in ("/O2" "/O1 /Oi") do (
+            for %%c in (native 0 1) do (
+              if "%%c"=="native" (cl /nologo /W3 /WX %%~o check_exact.c /Fece.exe > nul) else (cl /nologo /W3 /WX %%~o /DCHECK_COUNT_WORDS=%%c check_exact.c /Fece.exe > nul)
+              if errorlevel 1 (echo compile failed %%~o %%c & set fail=1) else (
+                echo|set /p="MSVC ${{ matrix.arch }} %%~o cw=%%c: "
+                ce.exe || set fail=1
+              )
+            )
+          )
+          exit /b %fail%

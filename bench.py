@@ -27,22 +27,30 @@ def which(tree):
 
 
 PHRASE = "Hello World, The Quick Brown Fox Jumps Over 13 Lazy Dogs! "
+# str inputs cycle through all 128 ASCII characters and bytes inputs through
+# all 256 byte values, each in a fixed shuffled order.
 SETUP = (
-    f"t = {PHRASE!r} * 2000\n"
+    "import random\n"
+    "r = random.Random(161155)\n"
+    "a = list(range(128)); r.shuffle(a)\n"
+    "b = list(range(256)); r.shuffle(b)\n"
+    "t = bytes(a * 520).decode()\n"
+    "tb = bytes(b * 260)\n"
     f"words = ({PHRASE!r} * 2).split() * 50\n"
     "hdrs = ['Host', 'Accept', 'User-Agent', 'Connection', 'Content-Type',"
     " 'Cache-Control', 'Content-Length', 'Accept-Encoding'] * 50"
 )
 
 if os.environ.get("BENCH_SET") == "short":
-    LOWER_SIZES, OTHER_SIZES = (1, 3, 5, 7, 8, 11, 15, 16, 32, 1024), (1, 7, 16)
+    SIZES = (1, 5, 7, 8, 16, 32, 1024)
 else:
-    LOWER_SIZES = (1, 3, 5, 7, 8, 11, 15, 16, 32, 64, 1024, 65536)
-    OTHER_SIZES = (1, 7, 8, 16, 1024)
-BENCHES = [(f"str.lower {n}", f"s = t[:{n}]", "s.lower()") for n in LOWER_SIZES]
-for n in OTHER_SIZES:
+    SIZES = (1, 3, 5, 7, 8, 11, 15, 16, 32, 64, 256, 1024, 65536)
+BENCHES = []
+for n in SIZES:
+    BENCHES.append((f"str.lower {n}", f"s = t[:{n}]", "s.lower()"))
     BENCHES.append((f"str.upper {n}", f"s = t[:{n}]", "s.upper()"))
-    BENCHES.append((f"bytes.lower {n}", f"s = t[:{n}].encode()", "s.lower()"))
+    BENCHES.append((f"bytes.lower {n}", f"s = tb[:{n}]", "s.lower()"))
+    BENCHES.append((f"bytes.upper {n}", f"s = tb[:{n}]", "s.upper()"))
 BENCHES.append(("words (1100, 2-6 chars)", "", "[w.lower() for w in words]"))
 BENCHES.append(("headers (400, 4-15 chars)", "", "[h.lower() for h in hdrs]"))
 

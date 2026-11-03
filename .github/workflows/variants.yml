@@ -111,6 +111,7 @@ jobs:
             P=$(python harness/bench.py --which $v)
             echo "== $v: $("$P" -c 'import sys; print(sys.version)')"
             "$P" -I harness/edge_cases.py
+            "$P" -I harness/check_all.py
             "$P" -m test test_str test_bytes test_userstring test_string -j0 2>&1 | tail -n 4
           done
 
