@@ -107,7 +107,8 @@ jobs:
             addrs=""
             for p in $PADS; do
               cmd=$(cd $t && make -n python-pad$p BUILDPYTHON=python-pad$p | tail -n 1)
-              new=${cmd/" -o python-pad$p Programs/python.o"/" -o python-pad$p $PWD/pad$p.o Programs/python.o"}
+              # sed, not ${cmd/.../...}: bash 3.2 (macOS /bin/bash) mangles that here.
+              new=$(printf '%s' "$cmd" | sed "s| -o python-pad$p Programs/python.o | -o python-pad$p $PWD/pad$p.o Programs/python.o |")
               if [ "$new" = "$cmd" ]; then echo "no link line for $t: $cmd"; exit 1; fi
               (cd $t && eval "$new")
               addrs="$addrs $(nm $t/python-pad$p | awk '/ _?ascii_case_words$/ {print $1}' | tail -c 6)"

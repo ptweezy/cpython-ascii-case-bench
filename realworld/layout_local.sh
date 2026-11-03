@@ -57,9 +57,10 @@ for t in base $VARIANTS; do
   addrs=""
   for p in $PADS; do
     cmd=$(cd $t && make -n python-pad$p BUILDPYTHON=python-pad$p | tail -n 1)
-    new=${cmd/" -o python-pad$p Programs/python.o"/" -o python-pad$p $PWD/pad$p.o Programs/python.o"}
+    # sed, not ${cmd/.../...}: bash 3.2 (macOS /bin/bash) mangles that here.
+    new=$(printf '%s' "$cmd" | sed "s| -o python-pad$p Programs/python.o | -o python-pad$p $PWD/pad$p.o Programs/python.o |")
     if [ "$new" = "$cmd" ]; then echo "no link line for $t: $cmd"; exit 1; fi
-    (cd $t && eval "$new") > /dev/null 2>&1
+    (cd $t && eval "$new") > relink.log 2>&1 || { echo "relink of $t at +$p failed:"; tail -n 20 relink.log; exit 1; }
     addrs="$addrs $(nm $t/python-pad$p | awk '/ _?_Py_bytes_lower$/ {print $1}' | tail -c 6)"
   done
   echo "$t: _Py_bytes_lower at$addrs"
