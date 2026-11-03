@@ -1,21 +1,24 @@
 name: check
 
-# Compile exact/check_exact.c against the PR's word helpers, copied verbatim
-# from Objects/bytes_methods.c with gh-161155.patch applied, and run it with
-# each runner's compilers, for both word loops (the MSVC one and the other).
-# Ubuntu also cross-compiles for 32-bit x86, 32-bit ARM and big-endian s390x
-# and PowerPC, run under QEMU.
+# Compile exact/check_exact.c against the word helpers of the PR
+# (gh-161155.patch) and of the short-path variants (variants/varK, varL,
+# varM), each copied verbatim from Objects/bytes_methods.c with the patch
+# applied, and run it with each runner's compilers, for both word loops (the
+# MSVC one and the other).  Ubuntu also cross-compiles for 32-bit x86,
+# 32-bit ARM and big-endian s390x and PowerPC, run under QEMU.
 
 on:
   workflow_dispatch:
   push:
-    paths: ["exact/**", "gh-161155.patch", ".github/workflows/check.yml"]
+    paths: ["exact/**", "gh-161155.patch", "variants/varK.patch", "variants/varL.patch",
+            "variants/varM.patch", ".github/workflows/check.yml"]
 
 permissions:
   contents: read
 
 env:
   CPYTHON_BASE: 4e0677ac610d9e890503fc0c0ca8351bfdd5f000
+  PATCHES: gh-161155 variants/varK variants/varL variants/varM
 
 jobs:
   unix:
@@ -30,14 +33,16 @@ jobs:
         with:
           path: harness
           persist-credentials: false
-      - name: PR's bytes_methods.c
+      - name: Sources
         shell: bash
         run: |
-          mkdir -p cp/Objects
-          curl -fsSL "https://raw.githubusercontent.com/python/cpython/$CPYTHON_BASE/Objects/bytes_methods.c" \
-               -o cp/Objects/bytes_methods.c
-          (cd cp && git apply --include=Objects/bytes_methods.c ../harness/gh-161155.patch)
-          python3 harness/exact/extract.py cp/Objects/bytes_methods.c harness/exact/pr_helpers.h
+          curl -fsSL "https://raw.githubusercontent.com/python/cpython/$CPYTHON_BASE/Objects/bytes_methods.c" -o main.c
+          for p in $PATCHES; do
+            n=$(basename $p)
+            mkdir -p src-$n/Objects && cp main.c src-$n/Objects/bytes_methods.c
+            (cd src-$n && git apply --include=Objects/bytes_methods.c ../harness/$p.patch)
+            python3 harness/exact/extract.py src-$n/Objects/bytes_methods.c harness/exact/h-$n.h
+          done
       - name: Cross compilers
         if: matrix.os == 'ubuntu-24.04'
         run: |
@@ -51,30 +56,34 @@ jobs:
           fail=0
           run() {  # label, then compiler command; runner prefix in $EMU
             if "${@:2}" -fno-strict-overflow -Wall -Wextra -Werror check_exact.c -o ce; then
-              printf '%-44s ' "$1"; $EMU ./ce || fail=1
+              printf '%-10s %-46s ' "$n" "$1"; $EMU ./ce || fail=1
             else
-              echo "$1: compile failed"; fail=1
+              echo "$n $1: compile failed"; fail=1
             fi
           }
-          for cc in gcc clang; do
-            command -v $cc > /dev/null || continue
-            for o in -O2 -O3; do
-              for cw in 0 1; do
-                EMU= run "$cc $o ($($cc -dumpmachine))" $cc $o -DCHECK_COUNT_WORDS=$cw
+          for p in $PATCHES; do
+            n=$(basename $p)
+            cp h-$n.h pr_helpers.h
+            for cc in gcc clang; do
+              command -v $cc > /dev/null || continue
+              for o in -O2 -O3; do
+                for cw in 0 1; do
+                  EMU= run "$cc $o ($($cc -dumpmachine))" $cc $o -DCHECK_COUNT_WORDS=$cw
+                done
               done
             done
+            if [ "${{ matrix.os }}" = ubuntu-24.04 ]; then
+              for cw in 0 1; do
+                EMU= run "gcc -O2 -m32" gcc -O2 -m32 -DCHECK_COUNT_WORDS=$cw
+                EMU=qemu-s390x run "s390x-linux-gnu-gcc -O2 (big-endian)" \
+                    s390x-linux-gnu-gcc -O2 -static -DCHECK_COUNT_WORDS=$cw
+                EMU=qemu-ppc run "powerpc-linux-gnu-gcc -O2 (big-endian, 32-bit)" \
+                    powerpc-linux-gnu-gcc -O2 -static -DCHECK_COUNT_WORDS=$cw
+                EMU=qemu-arm run "arm-linux-gnueabihf-gcc -O2 (32-bit)" \
+                    arm-linux-gnueabihf-gcc -O2 -static -DCHECK_COUNT_WORDS=$cw
+              done
+            fi
           done
-          if [ "${{ matrix.os }}" = ubuntu-24.04 ]; then
-            for cw in 0 1; do
-              EMU= run "gcc -O2 -m32" gcc -O2 -m32 -DCHECK_COUNT_WORDS=$cw
-              EMU=qemu-s390x run "s390x-linux-gnu-gcc -O2 (big-endian)" \
-                  s390x-linux-gnu-gcc -O2 -static -DCHECK_COUNT_WORDS=$cw
-              EMU=qemu-ppc run "powerpc-linux-gnu-gcc -O2 (big-endian, 32-bit)" \
-                  powerpc-linux-gnu-gcc -O2 -static -DCHECK_COUNT_WORDS=$cw
-              EMU=qemu-arm run "arm-linux-gnueabihf-gcc -O2 (32-bit)" \
-                  arm-linux-gnueabihf-gcc -O2 -static -DCHECK_COUNT_WORDS=$cw
-            done
-          fi
           exit $fail
 
   windows:
@@ -95,28 +104,38 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - name: PR's bytes_methods.c
+      - name: Sources
         shell: bash
         run: |
-          mkdir -p cp/Objects
-          curl -fsSL "https://raw.githubusercontent.com/python/cpython/$CPYTHON_BASE/Objects/bytes_methods.c" \
-               -o cp/Objects/bytes_methods.c
-          (cd cp && git apply --include=Objects/bytes_methods.c ../harness/gh-161155.patch)
-          python harness/exact/extract.py cp/Objects/bytes_methods.c harness/exact/pr_helpers.h
+          curl -fsSL "https://raw.githubusercontent.com/python/cpython/$CPYTHON_BASE/Objects/bytes_methods.c" -o main.c
+          for p in $PATCHES; do
+            n=$(basename $p)
+            mkdir -p src-$n/Objects && cp main.c src-$n/Objects/bytes_methods.c
+            (cd src-$n && git apply --include=Objects/bytes_methods.c ../harness/$p.patch)
+            python harness/exact/extract.py src-$n/Objects/bytes_methods.c harness/exact/h-$n.h
+          done
       - name: Check
-        shell: cmd
+        shell: pwsh
         working-directory: harness\exact
         run: |
-          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath`) do set VS=%%i
-          call "%VS%\VC\Auxiliary\Build\vcvarsall.bat" ${{ matrix.arch }} > nul || exit /b 1
-          set fail=0
-          for %%o in ("/O2" "/O1 /Oi") do (
-            for %%c in (native 0 1) do (
-              if "%%c"=="native" (cl /nologo /W3 /WX %%~o check_exact.c /Fece.exe > nul) else (cl /nologo /W3 /WX %%~o /DCHECK_COUNT_WORDS=%%c check_exact.c /Fece.exe > nul)
-              if errorlevel 1 (echo compile failed %%~o %%c & set fail=1) else (
-                echo|set /p="MSVC ${{ matrix.arch }} %%~o cw=%%c: "
-                ce.exe || set fail=1
-              )
-            )
-          )
-          exit /b %fail%
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath
+          cmd /c "`"$vs\VC\Auxiliary\Build\vcvarsall.bat`" ${{ matrix.arch }} > nul && set" | ForEach-Object {
+            if ($_ -match '^([^=]+)=(.*)$') { Set-Item "env:$($Matches[1])" $Matches[2] }
+          }
+          $fail = 0
+          foreach ($p in $env:PATCHES.Split(' ')) {
+            $n = Split-Path $p -Leaf
+            Copy-Item -Force "h-$n.h" pr_helpers.h
+            foreach ($o in @('/O2'), @('/O1', '/Oi')) {
+              foreach ($cw in 'native', '0', '1') {
+                $opts = [Collections.Generic.List[string]]::new([string[]]$o)
+                if ($cw -ne 'native') { $opts.Add("/DCHECK_COUNT_WORDS=$cw") }
+                cl /nologo /W3 /WX $opts check_exact.c /Fece.exe | Out-Null
+                if ($LASTEXITCODE -ne 0) { "$n MSVC ${{ matrix.arch }} $o cw=${cw}: compile failed"; $fail = 1; continue }
+                $r = & .\ce.exe
+                "{0,-10} MSVC ${{ matrix.arch }} {1,-8} cw={2,-7} {3}" -f $n, ($o -join ' '), $cw, $r
+                if ($LASTEXITCODE -ne 0) { $fail = 1 }
+              }
+            }
+          }
+          exit $fail

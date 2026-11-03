@@ -10,9 +10,10 @@
       on 16 fills, for lower and upper.
    2. pr_bytes_lower/upper: every byte value at every position for lengths
       0..80 and at 27 positions of lengths around word multiples up to
-      4,097; random bytes at lengths 0..1,100 with source and destination
-      offsets 0..15.  The destination's neighbours and the source must be
-      left alone. */
+      4,097; every pair of byte values at every pair of positions for
+      lengths 2..9; random bytes at lengths 0..1,100 with source and
+      destination offsets 0..15.  The destination's neighbours and the
+      source must be left alone. */
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -40,6 +41,11 @@ typedef ptrdiff_t Py_ssize_t;
 #  endif
 #endif
 #define PyDoc_STRVAR_shared(name, str) static const char name[] = str
+#if defined(__clang__) || (defined(__GNUC__) && __GNUC__ >= 7)
+#  define _Py_FALLTHROUGH __attribute__((fallthrough))
+#else
+#  define _Py_FALLTHROUGH do { } while (0)
+#endif
 
 static unsigned char tolower_tab[256], toupper_tab[256];
 #define Py_TOLOWER(c) (tolower_tab[(unsigned char)(c)])
@@ -87,10 +93,13 @@ static unsigned char want[4200], saved[4200 + 2 * PAD];
 static void check_func(const unsigned char *data, Py_ssize_t n, int soff, int doff)
 {
     for (int upper = 0; upper < 2; upper++) {
+        /* the source with PAD bytes after it, and the destination with
+           PAD guard bytes on each side */
         unsigned char *src = srcbuf + soff, *dst = dstbuf + PAD + doff;
+        size_t srcwin = soff + n + PAD;
         memcpy(src, data, n);
-        memcpy(saved, srcbuf, sizeof(srcbuf));
-        memset(dstbuf, 0xA5, sizeof(dstbuf));
+        memcpy(saved, srcbuf, srcwin);
+        memset(dst - PAD, 0xA5, n + 2 * PAD);
         for (Py_ssize_t i = 0; i < n; i++) {
             want[i] = upper ? ref_upper(data[i]) : ref_lower(data[i]);
         }
@@ -101,12 +110,9 @@ static void check_func(const unsigned char *data, Py_ssize_t n, int soff, int do
             pr_bytes_lower((char *)dst, (const char *)src, n);
         }
         int ok = memcmp(dst, want, n) == 0
-                 && memcmp(srcbuf, saved, sizeof(srcbuf)) == 0;
-        for (unsigned char *p = dstbuf; ok && p < dst; p++) {
-            ok = *p == 0xA5;
-        }
-        for (unsigned char *p = dst + n; ok && p < dstbuf + sizeof(dstbuf); p++) {
-            ok = *p == 0xA5;
+                 && memcmp(srcbuf, saved, srcwin) == 0;
+        for (int k = 1; ok && k <= PAD; k++) {
+            ok = dst[-k] == 0xA5 && dst[n - 1 + k] == 0xA5;
         }
         if (!ok && bad++ < 10) {
             printf("%s mismatch: len %ld, src offset %d, dst offset %d\n",
@@ -160,6 +166,20 @@ int main(void)
     for (Py_ssize_t n = 0; n <= 80; n++)
         for (Py_ssize_t pos = 0; pos < n; pos++)
             every_value_at(n, pos);
+    for (Py_ssize_t n = 2; n <= 9; n++)
+        for (Py_ssize_t p = 0; p < n; p++)
+            for (Py_ssize_t q = p + 1; q < n; q++) {
+                unsigned char data[9];
+                for (Py_ssize_t i = 0; i < n; i++) {
+                    data[i] = rnd();
+                }
+                for (int a = 0; a < 256; a++)
+                    for (int b = 0; b < 256; b++) {
+                        data[p] = (unsigned char)a;
+                        data[q] = (unsigned char)b;
+                        check_func(data, n, (a + b) % PAD, b % PAD);
+                    }
+            }
     static const int mults[] = {3, 4, 8, 16, 32, 64, 128, 512};
     for (size_t m = 0; m < sizeof(mults) / sizeof(mults[0]); m++)
         for (int d = -1; d <= 1; d++) {
