@@ -1,0 +1,84 @@
+#!/bin/bash
+# The layout test on a local Linux or macOS machine (layout.yml does the
+# same on GitHub runners).  Builds main and the variants, relinks each build
+# once per shift with a padding object of that many bytes ahead of all of
+# Python's own code (same code, every function moved), checks the variants,
+# then times every (build, shift): the real-world replay and fixed lengths.
+# Needs git, a C compiler and python3 (standard library only).
+#
+#   realworld/layout_local.sh WORKDIR "varJ varV ..." [configure args...]
+#
+# Environment: ROUNDS (default 5), PADS (default below), REPLAY_CPU (Linux:
+# pin timed runs to that logical CPU), JOBS (make -j, default all CPUs).
+# Results: WORKDIR/results/{layout.md,lengths.md} plus the raw JSON.
+set -euo pipefail
+H=$(cd "$(dirname "$0")/.." && pwd)
+W=$1; VARIANTS=$2; shift 2
+CPYTHON_BASE=4e0677ac610d9e890503fc0c0ca8351bfdd5f000
+PADS=${PADS:-"0 16 32 48 1024 2064 3104 4080"}
+ROUNDS=${ROUNDS:-5}
+JOBS=${JOBS:-$(getconf _NPROCESSORS_ONLN)}
+mkdir -p "$W/results" && cd "$W"
+
+if [ ! -d base ]; then
+  git init -q base
+  git -C base fetch -q --depth 1 https://github.com/python/cpython $CPYTHON_BASE
+  git -C base checkout -q FETCH_HEAD
+fi
+for v in $VARIANTS; do
+  if [ ! -d $v ]; then
+    git -C base worktree add -q --detach ../$v HEAD
+    git -C $v apply --cached "$H/variants/$v.patch"
+    git -C $v checkout -- .
+  fi
+done
+
+for t in base $VARIANTS; do
+  if [ ! -x $t/python-pad0 ]; then
+    (cd $t && { [ -f Makefile ] || ./configure -q "$@" > ../configure-$t.log 2>&1; } \
+      && make -j$JOBS > ../make-$t.log 2>&1) || { tail -n 40 configure-$t.log make-$t.log; exit 1; }
+    echo "built $t"
+  fi
+done
+
+for p in $PADS; do
+  if [ "$(uname)" = Darwin ]; then
+    printf '.text\n.space %d, 0x90\n' $p > pad$p.s
+  else
+    printf '.text\n.skip %d, 0x90\n.section .note.GNU-stack,"",@progbits\n' $p > pad$p.s
+  fi
+  cc -c pad$p.s -o pad$p.o
+done
+for t in base $VARIANTS; do
+  addrs=""
+  for p in $PADS; do
+    cmd=$(cd $t && make -n python-pad$p BUILDPYTHON=python-pad$p | tail -n 1)
+    new=${cmd/" -o python-pad$p Programs/python.o"/" -o python-pad$p $PWD/pad$p.o Programs/python.o"}
+    if [ "$new" = "$cmd" ]; then echo "no link line for $t: $cmd"; exit 1; fi
+    (cd $t && eval "$new") > /dev/null 2>&1
+    addrs="$addrs $(nm $t/python-pad$p | awk '/ _?_Py_bytes_lower$/ {print $1}' | tail -c 6)"
+  done
+  echo "$t: _Py_bytes_lower at$addrs"
+done
+
+for v in $VARIANTS; do
+  for p in $PADS; do "$v/python-pad$p" -I "$H/edge_cases.py" > /dev/null; done
+  echo "$v: $("$v/python-pad0" -I "$H/edge_cases.py" | tail -n 1) / $("$v/python-pad0" -I "$H/check_all.py")"
+done
+
+replay="" lens=""
+for t in base $VARIANTS; do
+  for p in $PADS; do
+    name=$t.p$p; [ $t = base ] && name=main.p$p
+    lens="$lens $name=$t/python-pad$p"
+    [ $name = main.p0 ] && name=base
+    replay="$replay $name=$t/python-pad$p"
+  done
+done
+echo "replay, $ROUNDS rounds ($(date +%T))"
+python3 "$H/realworld/replay_drive.py" "$H/realworld/hist" results/layout $ROUNDS $replay > results/layout-drive.txt
+python3 "$H/realworld/layout_summary.py" results/layout/times.json | tee results/layout.md
+echo "fixed lengths, 3 rounds ($(date +%T))"
+python3 "$H/realworld/len_layout.py" results/lengths.json 3 $lens
+python3 "$H/realworld/len_layout_summary.py" results/lengths.json | tee results/lengths.md
+echo "done ($(date +%T))"
