@@ -17,7 +17,7 @@ The matrix covers Linux, Windows and macOS on x86-64 and arm64, each with a plai
 gh workflow run bench.yml
 ```
 
-The `variants` workflow compares several versions of the change (the patches in `variants/`) against `main` on each runner. Its `build` input picks release, pgo or novec builds (as in `bench`), and `bench_set` picks the short-string set or the full one:
+The `variants` workflow compares several versions of the change (the patches in `variants/`) against `main` on each runner. Its `build` input picks release, pgo or novec builds (as in `bench`), or o2 (`CFLAGS=-O2`, which configure puts after its own `-O3`, as distribution builds do: Ubuntu's and Fedora's `python3` record `-O2`), and `bench_set` picks the short-string set or the full one:
 
 - `varA` is the change as proposed.
 - `varC` moves the word loop into one helper marked `Py_NO_INLINE`, which the lower and upper functions call only for strings of at least one word.
@@ -31,6 +31,7 @@ The `variants` workflow compares several versions of the change (the patches in 
 - `varJ` is `varI` with the overlapping last word converted after the loop again, as in `varG2`, so outside MSVC it is `varG2` with the constants passed in. The PR's latest revision (9433a66) is `varJ` with shorter comments.
 - `varK`, `varL` and `varM` are the PR's latest revision (9433a66) with an explicit path for strings shorter than a word, instead of the byte loop. gcc's PGO+LTO build stops peeling that loop once long strings no longer go through it (its training count falls under the link-time hot threshold), which costs about 0.5 ns at length 5. `varK` uses a fall-through `switch` over the lengths 7..1. `varL` converts lengths 4..7 as two overlapping 4-byte words and 2..3 as two overlapping 2-byte words, with a 32-bit `ascii_case_bits32()`. `varM` gives `ascii_case_word()` a byte count, so lengths 4..7 take two overlapping 4-byte words and 1..3 the bytes at 0, len/2 and len - 1, and `_Py_bytes_lower()`/`_Py_bytes_upper()` become one line each.
 - `varV` is the PR's latest revision with `__builtin_memcpy` instead of `memcpy` in `ascii_case_word()` under gcc and clang. With `_FORTIFY_SOURCE` (on by default in the macOS SDK, and in many Linux distributions' builds), `memcpy` becomes a checked call that keeps clang from vectorizing the word loop; gcc vectorizes it either way.
+- `varX` is `varV` with two words per loop iteration outside MSVC, both loaded before either is stored, and the last pair (or, below 16 characters, the last word) overlapping. At `-O2`, gcc keeps a loop over single words scalar (its cheap cost model won't add a remainder loop or an overlap check), but it vectorizes the pair, so distribution builds get the vector loop too. MSVC's branch is unchanged.
 - `varW` is `varL` (overlapping words for strings shorter than a word) plus `varV`'s `__builtin_memcpy`. On shuffled real-world length mixes (`realworld/`), `varL` was the fastest short path on an Apple M4 and on x86 with gcc and clang, release and PGO.
 
 ```

@@ -1,0 +1,112 @@
+diff --git a/Objects/bytes_methods.c b/Objects/bytes_methods.c
+--- a/Objects/bytes_methods.c
++++ b/Objects/bytes_methods.c
+@@ -242,6 +242,86 @@
+ }
+ 
+ 
++/* Return 0x20 in each byte of x that lies in first..first+25, else 0,
++   given 0x80 - first and 0x80 - first - 26 in every byte of ge and gt.
++   For a byte b < 0x80, b + (0x80 - first) has its high bit set iff
++   b >= first, and b + (0x80 - first - 26) iff b > first + 25; neither
++   sum carries.  "& ~x" drops bytes >= 0x80. */
++static inline Py_ALWAYS_INLINE size_t
++ascii_case_bits(size_t x, size_t ge, size_t gt)
++{
++    const size_t ones = (size_t)-1 / 0xff;  /* 0x01 in every byte */
++    size_t b = x & (0x7f * ones);
++    size_t ge_first = b + ge;
++    size_t gt_last = b + gt;
++    return (ge_first & ~gt_last & ~x & (0x80 * ones)) >> 2;
++}
++
++/* _FORTIFY_SOURCE (on by default in the macOS SDK) turns memcpy() into a
++   checked call that keeps clang from vectorizing the word loop. */
++#if defined(__GNUC__) || defined(__clang__)
++#  define ASCII_CASE_MEMCPY __builtin_memcpy
++#else
++#  define ASCII_CASE_MEMCPY memcpy
++#endif
++
++static inline Py_ALWAYS_INLINE void
++ascii_case_word(char *result, const char *cptr, Py_ssize_t i,
++                size_t ge, size_t gt)
++{
++    size_t x;
++    ASCII_CASE_MEMCPY(&x, cptr + i, sizeof(x));
++    x ^= ascii_case_bits(x, ge, gt);
++    ASCII_CASE_MEMCPY(result + i, &x, sizeof(x));
++}
++
++/* Two words, both loaded before either is stored. */
++static inline Py_ALWAYS_INLINE void
++ascii_case_pair(char *result, const char *cptr, Py_ssize_t i,
++                size_t ge, size_t gt)
++{
++    size_t x, y;
++    ASCII_CASE_MEMCPY(&x, cptr + i, sizeof(x));
++    ASCII_CASE_MEMCPY(&y, cptr + i + sizeof(x), sizeof(y));
++    x ^= ascii_case_bits(x, ge, gt);
++    y ^= ascii_case_bits(y, ge, gt);
++    ASCII_CASE_MEMCPY(result + i, &x, sizeof(x));
++    ASCII_CASE_MEMCPY(result + i + sizeof(x), &y, sizeof(y));
++}
++
++/* Requires len >= SIZEOF_SIZE_T.  The last word or pair may overlap the
++   ones before it; converting a byte twice is harmless.  Not inlined, so
++   that short strings skip its setup. */
++static Py_NO_INLINE void
++ascii_case_words(char *result, const char *cptr, Py_ssize_t len,
++                 unsigned char first)
++{
++    const size_t ones = (size_t)-1 / 0xff;
++    size_t ge = (0x80 - first) * ones, gt = (0x80 - first - 26) * ones;
++    Py_ssize_t i;
++#if defined(_MSC_VER) && !defined(__clang__)
++    /* MSVC only vectorizes loops that count by one; elsewhere such a loop
++       gets post-indexed accesses, slow on Apple cores.  Dividing unsigned
++       avoids an idiv in code optimized for size. */
++    Py_ssize_t n = (size_t)(len - 1) / SIZEOF_SIZE_T;
++    for (i = 0; i < n; i++) {
++        ascii_case_word(result, cptr, i * SIZEOF_SIZE_T, ge, gt);
++    }
++#else
++    /* gcc at -O2 (as Linux distributions build) leaves a loop over single
++       words scalar, but vectorizes a pair. */
++    if (len >= 2 * SIZEOF_SIZE_T) {
++        for (i = 0; i < len - 2 * SIZEOF_SIZE_T; i += 2 * SIZEOF_SIZE_T) {
++            ascii_case_pair(result, cptr, i, ge, gt);
++        }
++        ascii_case_pair(result, cptr, len - 2 * SIZEOF_SIZE_T, ge, gt);
++        return;
++    }
++    ascii_case_word(result, cptr, 0, ge, gt);
++#endif
++    ascii_case_word(result, cptr, len - SIZEOF_SIZE_T, ge, gt);
++}
++
+ PyDoc_STRVAR_shared(_Py_lower__doc__,
+ "B.lower() -> copy of B\n\
+ \n\
+@@ -252,6 +332,10 @@
+ {
+     Py_ssize_t i;
+ 
++    if (len >= SIZEOF_SIZE_T) {
++        ascii_case_words(result, cptr, len, 'A');
++        return;
++    }
+     for (i = 0; i < len; i++) {
+         result[i] = Py_TOLOWER((unsigned char) cptr[i]);
+     }
+@@ -268,6 +352,10 @@
+ {
+     Py_ssize_t i;
+ 
++    if (len >= SIZEOF_SIZE_T) {
++        ascii_case_words(result, cptr, len, 'a');
++        return;
++    }
+     for (i = 0; i < len; i++) {
+         result[i] = Py_TOUPPER((unsigned char) cptr[i]);
+     }

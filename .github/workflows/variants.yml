@@ -3,7 +3,8 @@ name: variants
 # Builds of main plus several variants of the change (patches in
 # variants/), checked and then timed side by side on each runner.  Build
 # types as in bench.yml: release, pgo (plus LTO on Linux and macOS) or
-# novec (Linux and macOS only).  The benchmark set is short (focused on
+# novec (Linux and macOS only), plus o2: CFLAGS=-O2, which configure puts
+# after its own -O3, as in distribution builds (Linux and macOS only).  The benchmark set is short (focused on
 # short strings) or full.
 
 on:
@@ -16,7 +17,7 @@ on:
         description: JSON list of runner labels
         default: '["ubuntu-24.04", "ubuntu-24.04-arm", "windows-2025", "windows-11-arm", "macos-15", "macos-15-intel"]'
       build:
-        description: release, pgo or novec
+        description: release, pgo, o2 or novec
         default: release
       bench_set:
         description: short or full
@@ -84,6 +85,7 @@ jobs:
         run: |
           args=(-q)
           if [ "$BENCH_BUILD" = pgo ]; then args+=(--enable-optimizations --with-lto); fi
+          if [ "$BENCH_BUILD" = o2 ]; then args+=("CFLAGS=-O2"); fi
           if [ "$BENCH_BUILD" = novec ]; then
             if [ "$RUNNER_OS" = macOS ]; then args+=("CFLAGS=-fno-vectorize -fno-slp-vectorize")
             else args+=("CFLAGS=-fno-tree-vectorize"); fi
