@@ -21,6 +21,12 @@ on:
       bench_set:
         description: short or full
         default: short
+      reps:
+        description: JSON list of job numbers per runner (each job may get a different CPU)
+        default: '[1, 2]'
+      replay_rounds:
+        description: rounds of the real-world replay
+        default: '5'
 
 permissions:
   contents: read
@@ -37,7 +43,7 @@ jobs:
       fail-fast: false
       matrix:
         os: ${{ fromJSON(inputs.runners) }}
-        rep: [1, 2]
+        rep: ${{ fromJSON(inputs.reps || '[1, 2]') }}
     env:
       BENCH_RUNNER: ${{ matrix.os }}
       BENCH_BUILD: ${{ inputs.build || 'release' }}
@@ -126,11 +132,15 @@ jobs:
       - name: Real-world replay
         shell: bash
         # The lower() length mix of each realworld/hist workload, shuffled
-        # (see realworld/README.md); builds alternate over 5 rounds.
+        # (see realworld/README.md); builds alternate over replay_rounds
+        # rounds, each run pinned to logical CPU 1.
+        env:
+          REPLAY_CPU: "1"
+          ROUNDS: ${{ inputs.replay_rounds || '5' }}
         run: |
           specs="base=$(python harness/bench.py --which base)"
           for v in $VARIANTS; do specs="$specs $v=$(python harness/bench.py --which $v)"; done
-          python harness/realworld/replay_drive.py harness/realworld/hist results/replay 5 $specs
+          python harness/realworld/replay_drive.py harness/realworld/hist results/replay $ROUNDS $specs
 
       - uses: actions/upload-artifact@v4
         if: always()

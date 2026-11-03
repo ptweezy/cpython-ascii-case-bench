@@ -23,3 +23,6 @@ more, and `bigbytes` is their total length.
 
 `replay.py HISTDIR OUT.json` times `for s in L: s.lower()` over shuffled ASCII strings with
 each workload's length mix, so two builds can be compared on it.
+`replay_drive.py HISTDIR OUTDIR ROUNDS base=PYTHON name=PYTHON ...` runs it for several builds
+in alternating rounds (`REPLAY_CPU=N` pins each run to one logical CPU) and reports the best and
+the median round.
