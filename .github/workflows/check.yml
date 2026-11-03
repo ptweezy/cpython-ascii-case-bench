@@ -22,12 +22,18 @@ env:
 
 jobs:
   unix:
-    name: ${{ matrix.os }}
+    name: ${{ matrix.os }} ${{ matrix.extra }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel]
+        # gcc-multilib and the cross compilers can't be installed together
+        include:
+          - {os: ubuntu-24.04, extra: m32}
+          - {os: ubuntu-24.04, extra: cross}
+          - {os: ubuntu-24.04-arm, extra: ''}
+          - {os: macos-15, extra: ''}
+          - {os: macos-15-intel, extra: ''}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -43,11 +49,16 @@ jobs:
             (cd src-$n && git apply --include=Objects/bytes_methods.c ../harness/$p.patch)
             python3 harness/exact/extract.py src-$n/Objects/bytes_methods.c harness/exact/h-$n.h
           done
-      - name: Cross compilers
-        if: matrix.os == 'ubuntu-24.04'
+      - name: 32-bit compiler
+        if: matrix.extra == 'm32'
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q gcc-multilib gcc-s390x-linux-gnu gcc-powerpc-linux-gnu \
+          sudo apt-get install -y -q gcc-multilib
+      - name: Cross compilers
+        if: matrix.extra == 'cross'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q gcc-s390x-linux-gnu gcc-powerpc-linux-gnu \
                gcc-arm-linux-gnueabihf qemu-user
       - name: Check
         shell: bash
@@ -72,9 +83,13 @@ jobs:
                 done
               done
             done
-            if [ "${{ matrix.os }}" = ubuntu-24.04 ]; then
+            if [ "${{ matrix.extra }}" = m32 ]; then
               for cw in 0 1; do
                 EMU= run "gcc -O2 -m32" gcc -O2 -m32 -DCHECK_COUNT_WORDS=$cw
+              done
+            fi
+            if [ "${{ matrix.extra }}" = cross ]; then
+              for cw in 0 1; do
                 EMU=qemu-s390x run "s390x-linux-gnu-gcc -O2 (big-endian)" \
                     s390x-linux-gnu-gcc -O2 -static -DCHECK_COUNT_WORDS=$cw
                 EMU=qemu-ppc run "powerpc-linux-gnu-gcc -O2 (big-endian, 32-bit)" \
