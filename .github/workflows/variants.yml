@@ -123,6 +123,15 @@ jobs:
           for v in $VARIANTS; do specs="$specs $v=$v"; done
           python harness/bench.py --multi results pyperf-lib $specs
 
+      - name: Real-world replay
+        shell: bash
+        # The lower() length mix of each realworld/hist workload, shuffled
+        # (see realworld/README.md); builds alternate over 5 rounds.
+        run: |
+          specs="base=$(python harness/bench.py --which base)"
+          for v in $VARIANTS; do specs="$specs $v=$(python harness/bench.py --which $v)"; done
+          python harness/realworld/replay_drive.py harness/realworld/hist results/replay 5 $specs
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
