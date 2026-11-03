@@ -26,11 +26,15 @@ if [ ! -d base ]; then
   git -C base checkout -q FETCH_HEAD
 fi
 for v in $VARIANTS; do
-  if [ ! -d $v ]; then
-    git -C base worktree add -q --detach ../$v HEAD
+  [ -d $v ] || git -C base worktree add -q --detach ../$v HEAD
+  # Apply the patch unless the tree already differs from HEAD; refuse to go
+  # on with an unpatched tree (e.g. after a failed apply on an earlier run).
+  if git -C $v diff HEAD --quiet; then
     git -C $v apply --cached "$H/variants/$v.patch"
     git -C $v checkout -- .
   fi
+  if git -C $v diff HEAD --quiet; then echo "$v: patch not applied"; exit 1; fi
+  echo "$v: $(git -C $v diff HEAD --stat | tail -n 1)"
 done
 
 for t in base $VARIANTS; do
