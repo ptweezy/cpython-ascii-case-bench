@@ -17,3 +17,7 @@ The `variants` workflow is timing `main` (4e0677a) and the PR's code (`varJ`) on
 | Ryzen 7 9800X3D, Windows 11 | MSVC 19.51 | release | 1.01x | 1.03x | 1.16x | 2.29x | 3.38x | 5.70x |
 | Ryzen 7 9800X3D, Ubuntu 24.04 (WSL2) | gcc 13.3 | release | 1.01x | 1.09x | 1.31x | 3.20x | 4.23x | 6.73x |
 | Ryzen 7 9800X3D, Ubuntu 24.04 (WSL2) | gcc 13.3 | PGO+LTO | 1.00x | 1.08x | 1.23x | 2.13x | 1.82x | 2.00x |
+| Core i5-12400T, Fedora 44 | gcc 16.2 | release | 1.13x | 1.13x | 1.35x | 2.68x | 3.08x | 5.29x |
+| Core i5-12400T, Fedora 44 | gcc 16.2 | PGO+LTO | 0.98x | 1.10x | 1.29x | 1.56x | 1.71x | 2.04x |
+| Core i5-12400T, Fedora 44 | clang 22.1 | release | 1.03x | 1.12x | 1.27x | 2.11x | 2.85x | 4.48x |
+| Core i5-12400T, Fedora 44 | clang 22.1 | PGO+LTO | 1.00x | 1.11x | 1.37x | 2.15x | 2.26x | 3.15x |
