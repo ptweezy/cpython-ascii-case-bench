@@ -1,0 +1,169 @@
+name: layout
+
+# Code placement alone moves the short-string replay by several percent
+# (identical code a few bytes apart), more than the differences between
+# variants.  Here each build of main and the variants is relinked once per
+# shift with a padding object of that many bytes ahead of all of Python's
+# own code, so every function moves and the code stays the same.  The
+# replay then runs over every (build, shift) pair, and variants are
+# compared by their mean over shifts (realworld/layout_summary.py).  Linux
+# and macOS only: the relink edits the python link line from the Makefile.
+
+on:
+  workflow_dispatch:
+    inputs:
+      variants:
+        description: patch names in variants/, without .patch
+        default: "varJ varV varW varX"
+      runners:
+        description: JSON list of runner labels (Linux and macOS)
+        default: '["ubuntu-24.04", "ubuntu-24.04-arm", "macos-15", "macos-15-intel"]'
+      build:
+        description: release, or o2 (CFLAGS=-O2, after configure's -O3, as distributions build)
+        default: release
+      reps:
+        description: JSON list of job numbers per runner (each job may get a different CPU)
+        default: '[1, 2]'
+      pads:
+        description: shifts in bytes, multiples of 16 (the default covers each 16-byte offset in a 64-byte line twice)
+        default: "0 16 32 48 1024 2064 3104 4080"
+      rounds:
+        description: replay rounds
+        default: '5'
+
+permissions:
+  contents: read
+
+env:
+  CPYTHON_BASE: 4e0677ac610d9e890503fc0c0ca8351bfdd5f000
+
+jobs:
+  layout:
+    name: ${{ matrix.os }} / ${{ inputs.build || 'release' }} / run ${{ matrix.rep }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(inputs.runners) }}
+        rep: ${{ fromJSON(inputs.reps || '[1, 2]') }}
+    env:
+      BENCH_RUNNER: ${{ matrix.os }}
+      BENCH_BUILD: ${{ inputs.build || 'release' }}
+      BENCH_REP: ${{ matrix.rep }}
+      VARIANTS: ${{ inputs.variants || 'varJ varV varW varX' }}
+      PADS: ${{ inputs.pads || '0 16 32 48 1024 2064 3104 4080' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: harness
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: python/cpython
+          ref: ${{ env.CPYTHON_BASE }}
+          path: base
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Make variant trees
+        shell: bash
+        run: |
+          for v in $VARIANTS; do
+            git -C base worktree add -q --detach ../$v HEAD
+            git -C $v apply --cached ../harness/variants/$v.patch
+            git -C $v checkout -- .
+            git -C $v diff --cached --stat
+          done
+
+      - name: Build
+        shell: bash
+        run: |
+          args=(-q)
+          if [ "$BENCH_BUILD" = o2 ]; then args+=("CFLAGS=-O2"); fi
+          echo "configure ${args[*]}"
+          jobs=$(getconf _NPROCESSORS_ONLN)
+          for t in base $VARIANTS; do
+            if ! (cd $t && ./configure "${args[@]}" > ../configure-$t.log 2>&1 && make -j$jobs > ../make-$t.log 2>&1); then
+              tail -n 60 configure-$t.log make-$t.log; exit 1
+            fi
+            echo "built $t"
+          done
+
+      - name: Relink with each shift
+        shell: bash
+        run: |
+          for p in $PADS; do
+            if [ "$RUNNER_OS" = macOS ]; then
+              printf '.text\n.space %d, 0x90\n' $p > pad$p.s
+            else
+              printf '.text\n.skip %d, 0x90\n.section .note.GNU-stack,"",@progbits\n' $p > pad$p.s
+            fi
+            cc -c pad$p.s -o pad$p.o
+          done
+          for t in base $VARIANTS; do
+            addrs=""
+            for p in $PADS; do
+              cmd=$(cd $t && make -n python-pad$p BUILDPYTHON=python-pad$p | tail -n 1)
+              new=${cmd/" -o python-pad$p Programs/python.o"/" -o python-pad$p $PWD/pad$p.o Programs/python.o"}
+              if [ "$new" = "$cmd" ]; then echo "no link line for $t: $cmd"; exit 1; fi
+              (cd $t && eval "$new")
+              addrs="$addrs $(nm $t/python-pad$p | awk '/ _?ascii_case_words$/ {print $1}' | tail -c 6)"
+            done
+            echo "$t: ascii_case_words at$addrs"
+          done
+
+      - name: Check each variant at every shift
+        shell: bash
+        run: |
+          for v in $VARIANTS; do
+            for p in $PADS; do
+              "$v/python-pad$p" -I harness/edge_cases.py > /dev/null
+            done
+            echo "== $v: $("$v/python-pad0" -I harness/check_all.py)"
+          done
+
+      - name: Replay over every build and shift
+        shell: bash
+        env:
+          REPLAY_CPU: "1"
+          ROUNDS: ${{ inputs.rounds || '5' }}
+        run: |
+          mkdir -p results
+          python - <<'EOF'
+          import json, os, subprocess, sys
+          sys.path.insert(0, "harness")
+          import bench
+          meta = {k: os.environ.get(v, "") for k, v in
+                  (("runner", "BENCH_RUNNER"), ("build", "BENCH_BUILD"), ("rep", "BENCH_REP"), ("pads", "PADS"))}
+          meta["cpu"] = bench.cpu_model()
+          meta["machine"] = __import__("platform").machine()
+          for t in ["base"] + os.environ["VARIANTS"].split():
+              out =subprocess.run([f"{t}/python-pad0", "-c", "import sys, sysconfig; print(sys.version); print(sysconfig.get_config_var('CFLAGS'))"],
+                                   capture_output=True, text=True).stdout.splitlines()
+              meta[f"{t}_version"], meta[f"{t}_cflags"] = out[0], out[-1]
+          json.dump(meta, open("results/meta.json", "w"), indent=2)
+          print(json.dumps(meta, indent=2))
+          EOF
+          specs=""
+          for t in base $VARIANTS; do
+            for p in $PADS; do
+              name=$t.p$p
+              [ $t = base ] && name=main.p$p
+              [ $name = main.p0 ] && name=base
+              specs="$specs $name=$t/python-pad$p"
+            done
+          done
+          python harness/realworld/replay_drive.py harness/realworld/hist results/layout $ROUNDS $specs > results/layout-drive.txt
+          python harness/realworld/layout_summary.py results/layout/times.json | tee results/layout.md
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: layout-${{ matrix.os }}-${{ inputs.build || 'release' }}-${{ matrix.rep }}
+          path: |
+            results/
+            *.log
+          if-no-files-found: warn
