@@ -27,12 +27,11 @@ The PR converts a machine word at a time for strings of at least one word. Under
 | GitHub `ubuntu-24.04-arm`, Neoverse-N2 | gcc 13.3 | PGO+LTO | 0.99x | 1.10x | 1.38x | — | 2.51x | 3.48x |
 | GitHub `ubuntu-24.04-arm`, Neoverse-N2 | gcc 13.3 | release, no auto-vec | 0.99x | 1.07x | 1.26x | — | 2.54x | 3.41x |
 | GitHub `macos-15-intel`, Intel Core i7-8700B | Apple clang 17 | release | 0.96x | 1.04x | 0.97x | — | 1.88x | 3.14x |
+| GitHub `macos-15-intel`, Intel Core i7-8700B | Apple clang 17 | PGO+LTO | 1.06x | 1.04x | 1.15x | — | 1.81x | 2.69x |
 | GitHub `macos-15-intel`, Intel Core i7-8700B | Apple clang 17 | release, no auto-vec | 0.98x | 0.97x | 1.12x | — | 1.98x | 3.03x |
 | GitHub `macos-15`, Apple M1 (Virtual) | Apple clang 17 | release | 1.03x | 1.15x | 1.39x | — | 2.59x | 3.57x |
 | GitHub `macos-15`, Apple M1 (Virtual) | Apple clang 17 | PGO+LTO | 0.94x | 1.04x | 1.44x | — | 2.66x | 3.58x |
 | GitHub `macos-15`, Apple M1 (Virtual) | Apple clang 17 | release, no auto-vec | 1.03x | 1.17x | 1.57x | — | 3.28x | 3.79x |
-
-Still running: a re-run of one `macos-15-intel` PGO job, which failed to link an earlier revision of the PR. That row will be added here.
 
 ## How it was measured
 
