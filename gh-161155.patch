@@ -1,24 +1,4 @@
-From b4d59af15e67769e18c44af7763d8511baa4e754 Mon Sep 17 00:00:00 2001
-From: Parker Loflin <parker@cronstable.dev>
-Date: Mon, 2 Nov 2026 01:21:21 +0000
-Subject: [PATCH] gh-161155: Speed up ASCII lower() and upper() for str, bytes
- and bytearray
-
-_Py_bytes_lower() and _Py_bytes_upper() now convert strings of at least
-one machine word (8 bytes on 64-bit platforms, 4 on 32-bit) a word at a
-time with integer arithmetic.  When the length is not a multiple of the
-word size, the last word overlaps the one before it.  Shorter strings
-still take the existing table loop.
-
-str.lower(), str.upper() and str.casefold() use these functions for
-ASCII strings, as do lower(), upper() and capitalize() on bytes and
-bytearray.
----
- ...-11-02-05-27-54.gh-issue-161155.xXLPBV.rst |  4 ++
- Objects/bytes_methods.c                       | 54 +++++++++++++++++++
- 2 files changed, 58 insertions(+)
- create mode 100644 Misc/NEWS.d/next/Core_and_Builtins/2026-11-02-05-27-54.gh-issue-161155.xXLPBV.rst
-
+python/cpython#161201 at 9433a66, as one diff against main.
 diff --git a/Misc/NEWS.d/next/Core_and_Builtins/2026-11-02-05-27-54.gh-issue-161155.xXLPBV.rst b/Misc/NEWS.d/next/Core_and_Builtins/2026-11-02-05-27-54.gh-issue-161155.xXLPBV.rst
 new file mode 100644
 index 0000000..ba188f9
@@ -30,63 +10,68 @@ index 0000000..ba188f9
 +:class:`bytearray` counterparts, by converting a machine word at a time.
 +Patch by Parker Loflin.
 diff --git a/Objects/bytes_methods.c b/Objects/bytes_methods.c
-index 414afeb..0a247d6 100644
+index 414afeb..2e2236c 100644
 --- a/Objects/bytes_methods.c
 +++ b/Objects/bytes_methods.c
-@@ -242,6 +242,52 @@ _Py_bytes_istitle(const char *cptr, Py_ssize_t len)
+@@ -242,6 +242,57 @@ _Py_bytes_istitle(const char *cptr, Py_ssize_t len)
  }
  
  
-+/* Return 0x20 in each byte of the word x that is in the range
-+   first..first+25 ('A'..'Z' or 'a'..'z'), and 0 in every other byte.
-+   XOR-ing the result into x switches the case of exactly those letters.
-+
-+   For a byte b below 0x80, b + (0x80 - first) has its high bit set iff
-+   b >= first, and b + (0x80 - first - 26) has its high bit set iff
-+   b > first + 25.  The sums stay below 0x100, so nothing carries into the
-+   next byte.  Bytes 0x80 and above are dropped by "& ~x".  Every step works
-+   on each byte separately, so the result depends neither on byte order nor
-+   on the size of size_t. */
++/* Return 0x20 in each byte of x that lies in first..first+25, else 0,
++   given 0x80 - first and 0x80 - first - 26 in every byte of ge and gt.
++   For a byte b < 0x80, b + (0x80 - first) has its high bit set iff
++   b >= first, and b + (0x80 - first - 26) iff b > first + 25; neither
++   sum carries.  "& ~x" drops bytes >= 0x80. */
 +static inline Py_ALWAYS_INLINE size_t
-+ascii_case_bits(size_t x, unsigned char first)
++ascii_case_bits(size_t x, size_t ge, size_t gt)
 +{
 +    const size_t ones = (size_t)-1 / 0xff;  /* 0x01 in every byte */
 +    size_t b = x & (0x7f * ones);
-+    size_t ge_first = b + (0x80 - first) * ones;
-+    size_t gt_last = b + (0x80 - first - 26) * ones;
++    size_t ge_first = b + ge;
++    size_t gt_last = b + gt;
 +    return (ge_first & ~gt_last & ~x & (0x80 * ones)) >> 2;
 +}
 +
-+/* Convert the word at cptr + i into result + i. */
 +static inline Py_ALWAYS_INLINE void
 +ascii_case_word(char *result, const char *cptr, Py_ssize_t i,
-+                unsigned char first)
++                size_t ge, size_t gt)
 +{
 +    size_t x;
 +    memcpy(&x, cptr + i, sizeof(x));
-+    x ^= ascii_case_bits(x, first);
++    x ^= ascii_case_bits(x, ge, gt);
 +    memcpy(result + i, &x, sizeof(x));
 +}
 +
-+/* Convert len >= SIZEOF_SIZE_T bytes a word at a time.  If len is not a
-+   multiple of the word size, the last word overlaps the one before it;
-+   converting a byte twice gives the same result as converting it once.
-+   Kept out of line so that short strings don't pay for its setup. */
++/* Requires len >= SIZEOF_SIZE_T.  The last word may overlap the one before
++   it; converting a byte twice is harmless.  Not inlined, so that short
++   strings skip its setup. */
 +static Py_NO_INLINE void
 +ascii_case_words(char *result, const char *cptr, Py_ssize_t len,
 +                 unsigned char first)
 +{
++    const size_t ones = (size_t)-1 / 0xff;
++    size_t ge = (0x80 - first) * ones, gt = (0x80 - first - 26) * ones;
 +    Py_ssize_t i;
-+    for (i = 0; i < len - SIZEOF_SIZE_T; i += SIZEOF_SIZE_T) {
-+        ascii_case_word(result, cptr, i, first);
++#if defined(_MSC_VER) && !defined(__clang__)
++    /* MSVC only vectorizes loops that count by one; elsewhere such a loop
++       gets post-indexed accesses, slow on Apple cores.  Dividing unsigned
++       avoids an idiv in code optimized for size. */
++    Py_ssize_t n = (size_t)(len - 1) / SIZEOF_SIZE_T;
++    for (i = 0; i < n; i++) {
++        ascii_case_word(result, cptr, i * SIZEOF_SIZE_T, ge, gt);
 +    }
-+    ascii_case_word(result, cptr, len - SIZEOF_SIZE_T, first);
++#else
++    for (i = 0; i < len - SIZEOF_SIZE_T; i += SIZEOF_SIZE_T) {
++        ascii_case_word(result, cptr, i, ge, gt);
++    }
++#endif
++    ascii_case_word(result, cptr, len - SIZEOF_SIZE_T, ge, gt);
 +}
 +
  PyDoc_STRVAR_shared(_Py_lower__doc__,
  "B.lower() -> copy of B\n\
  \n\
-@@ -252,6 +298,10 @@ _Py_bytes_lower(char *result, const char *cptr, Py_ssize_t len)
+@@ -252,6 +303,10 @@ _Py_bytes_lower(char *result, const char *cptr, Py_ssize_t len)
  {
      Py_ssize_t i;
  
@@ -97,7 +82,7 @@ index 414afeb..0a247d6 100644
      for (i = 0; i < len; i++) {
          result[i] = Py_TOLOWER((unsigned char) cptr[i]);
      }
-@@ -268,6 +318,10 @@ _Py_bytes_upper(char *result, const char *cptr, Py_ssize_t len)
+@@ -268,6 +323,10 @@ _Py_bytes_upper(char *result, const char *cptr, Py_ssize_t len)
  {
      Py_ssize_t i;
  
@@ -108,6 +93,3 @@ index 414afeb..0a247d6 100644
      for (i = 0; i < len; i++) {
          result[i] = Py_TOUPPER((unsigned char) cptr[i]);
      }
--- 
-2.56.0.windows.3
-

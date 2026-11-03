@@ -2,7 +2,7 @@
 
 Benchmarks for [python/cpython#161155](https://github.com/python/cpython/issues/161155), which speeds up ASCII `str.lower()`/`str.upper()` and `bytes.lower()`/`bytes.upper()` by converting a machine word at a time.
 
-The `bench` workflow builds CPython `main` at the patch's parent commit twice on each GitHub-hosted runner: once unchanged, once with `gh-161155.patch`. Since 2026-11-02 that patch is the overlapping-word version (`varG2` below); the first version is `variants/varA.patch`. Then it:
+The `bench` workflow builds CPython `main` at the patch's parent commit twice on each GitHub-hosted runner: once unchanged, once with `gh-161155.patch`. Since 2026-11-03 that patch is the PR's latest revision (9433a66), which has `varJ`'s code; before that it was `varG2`, and the first version is `variants/varA.patch`. Then it:
 
 - runs `edge_cases.py` and `test_str`, `test_bytes`, `test_userstring` and `test_string` on the patched build;
 - compiles `word_exhaustive_word.c` and `variants/gcheck_G.c` with the runner's C compiler and checks the word-level conversion, and the whole functions at lengths 0 to 80, against a per-byte reference;
@@ -26,7 +26,7 @@ The `variants` workflow compares several versions of the change (the patches in 
 - `varG2` is `varG` with the two small helpers marked `Py_ALWAYS_INLINE`. Without it, gcc's PGO+LTO build treats the word helper as cold (the PGO training doesn't reach it) and calls the per-word function instead of inlining it (1.4x instead of 2.1x at 1,024 characters locally); MSVC's PGO build loses some too (1.9x instead of 2.3x). Normal builds compile to the same code as `varG`.
 - `varH` is `varG2` with the word loop counting words (indexing an array-of-words type) and its two constants computed before the loop, so MSVC vectorizes it; the word count is unsigned so size-optimized builds don't use a division.
 - `varI` keeps `varG2`'s byte-stepping loop except under MSVC, which gets `varH`'s count-by-one loop; counting words makes clang use post-indexed loads and stores on AArch64, which are slower on Apple cores. Both branches compute the constants before the loop and convert the overlapping last word first.
-- `varJ` is `varI` with the overlapping last word converted after the loop again, as in `varG2`, so outside MSVC it is `varG2` with the constants passed in.
+- `varJ` is `varI` with the overlapping last word converted after the loop again, as in `varG2`, so outside MSVC it is `varG2` with the constants passed in. The PR's latest revision (9433a66) is `varJ` with shorter comments.
 
 ```
 gh workflow run variants.yml
