@@ -1,7 +1,7 @@
 diff --git a/Objects/bytes_methods.c b/Objects/bytes_methods.c
 --- a/Objects/bytes_methods.c
 +++ b/Objects/bytes_methods.c
-@@ -242,6 +242,89 @@
+@@ -242,6 +242,90 @@
  }
  
  
@@ -30,7 +30,8 @@ diff --git a/Objects/bytes_methods.c b/Objects/bytes_methods.c
 +    memcpy(result + i, &x, sizeof(x));
 +}
 +
-+#if defined(__GNUC__) && (defined(__x86_64__) || defined(__aarch64__))
++#if defined(__GNUC__) && (defined(__x86_64__) || defined(__aarch64__)) \
++    && SIZEOF_SIZE_T == 8
 +/* Convert 16 bytes as one SSE2 or NEON vector.  A vector type keeps this
 +   SIMD also where gcc and clang optimize for size, as in PGO builds whose
 +   training rarely runs this loop.  Constants are splatted explicitly:
@@ -91,7 +92,7 @@ diff --git a/Objects/bytes_methods.c b/Objects/bytes_methods.c
  PyDoc_STRVAR_shared(_Py_lower__doc__,
  "B.lower() -> copy of B\n\
  \n\
-@@ -252,6 +335,10 @@
+@@ -252,6 +336,10 @@
  {
      Py_ssize_t i;
  
@@ -102,7 +103,7 @@ diff --git a/Objects/bytes_methods.c b/Objects/bytes_methods.c
      for (i = 0; i < len; i++) {
          result[i] = Py_TOLOWER((unsigned char) cptr[i]);
      }
-@@ -268,6 +355,10 @@
+@@ -268,6 +356,10 @@
  {
      Py_ssize_t i;
  
