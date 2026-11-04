@@ -5,7 +5,8 @@
 Meant for every layout shift of every tree (see layout_local.sh).  Each
 build runs once per round, in an order that rotates each round and is
 reversed on odd rounds; the best time per build and length is saved.  With
-REPLAY_CPU=N on Linux, each run is pinned to logical CPU N.
+REPLAY_CPU=N, each run is pinned to logical CPU N (Linux; on Windows also
+at high priority).
 """
 import json, os, subprocess, sys
 
@@ -30,16 +31,31 @@ print(*('%%.3f' %% x for x in res))
 """ % (LENS,)
 
 kw = {}
-if cpu and hasattr(os, "sched_setaffinity"):
+if cpu and sys.platform == "win32":
+    kw["creationflags"] = subprocess.HIGH_PRIORITY_CLASS
+elif cpu and hasattr(os, "sched_setaffinity"):
     kw["preexec_fn"] = lambda: os.sched_setaffinity(0, {int(cpu)})
+
+
+def run(exe):
+    p = subprocess.Popen([exe, "-I", "-c", SNIP], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                         text=True, **kw)
+    if cpu and sys.platform == "win32":
+        import ctypes
+        ctypes.windll.kernel32.SetProcessAffinityMask(int(p._handle), 1 << int(cpu))
+    out, err = p.communicate()
+    if p.returncode:
+        sys.exit(f"{exe} failed: {err}")
+    return out
+
+
 best = {b: None for b in builds}
 for r in range(rounds):
     order = list(builds)[r % len(builds):] + list(builds)[:r % len(builds)]
     if r % 2:
         order.reverse()
     for b in order:
-        out = subprocess.run([builds[b], "-I", "-c", SNIP], capture_output=True, text=True,
-                             check=True, **kw).stdout
+        out = run(builds[b])
         v = [float(x) for x in out.split()]
         best[b] = v if best[b] is None else [min(a, c) for a, c in zip(best[b], v)]
 json.dump({"lens": LENS, "best": best}, open(out_path, "w"), indent=1)
