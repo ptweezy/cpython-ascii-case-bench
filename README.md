@@ -37,6 +37,8 @@ The `variants` workflow compares several versions of the change (the patches in 
 - `varQ` is `varP` plus `varW`'s overlapping words for strings shorter than a word.
 - `varR` is `varP` with the same 16-byte block loop for every compiler, and the PR's MSVC-only count-by-one loop removed: below 16 bytes only one or two words remain, so that loop no longer matters. MSVC turns the array block into SSE2 code at /O2 and also at /O1 /Oi (as for code that PGO finds cold), where the PR's loop is scalar. On gcc and clang it compiles to the same code as `varP`.
 - `varS` is `varR` plus `varW`'s overlapping words for strings shorter than a word.
+- `varT` is `varR` with the 16-byte block written as a GNU vector (`uint64_t` x 2, `vector_size(16)`) under gcc and clang on x86-64 and ARM64, with every constant splatted explicitly (no scalar operands, so older clang accepts it; see gh-148474). It stays SIMD where gcc and clang optimize for size: gcc 16 PGO builds (Fedora) leave `varR`'s plain-C block scalar. MSVC and other targets keep `varR`'s plain-C block.
+- `varU` is `varT` plus `varW`'s overlapping words for strings shorter than a word.
 - `varW` is `varL` (overlapping words for strings shorter than a word) plus `varV`'s `__builtin_memcpy`. On shuffled real-world length mixes (`realworld/`), `varL` was the fastest short path on an Apple M4 and on x86 with gcc and clang, release and PGO.
 
 ```
