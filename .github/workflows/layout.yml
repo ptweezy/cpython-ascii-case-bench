@@ -19,7 +19,7 @@ on:
         description: JSON list of runner labels (Linux and macOS)
         default: '["ubuntu-24.04", "ubuntu-24.04-arm", "macos-15", "macos-15-intel"]'
       build:
-        description: release, o2 (CFLAGS=-O2, after configure's -O3, as distributions build) or pgo (--enable-optimizations --with-lto)
+        description: release, o2 (CFLAGS=-O2, after configure's -O3, as distributions build), lto (--with-lto without PGO, as FreeBSD's ports build) or pgo (--enable-optimizations --with-lto)
         default: release
       reps:
         description: JSON list of job numbers per runner (each job may get a different CPU)
@@ -128,6 +128,7 @@ jobs:
           args=(-q)
           if [ "$BENCH_BUILD" = o2 ]; then args+=("CFLAGS=-O2"); fi
           if [ "$BENCH_BUILD" = pgo ]; then args+=(--enable-optimizations --with-lto); fi
+          if [ "$BENCH_BUILD" = lto ]; then args+=(--with-lto); fi
           if [ -n "$BENCH_CC" ]; then args+=("CC=$BENCH_CC"); "$BENCH_CC" --version | head -n 1; fi
           # clang's PGO and LTO need llvm-profdata and llvm-ar, which Ubuntu
           # keeps next to clang in /usr/lib/llvm-N/bin.
