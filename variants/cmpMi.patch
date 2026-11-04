@@ -1,0 +1,71 @@
+diff --git a/Objects/bytes_methods.c b/Objects/bytes_methods.c
+index 414afeb..5961413 100644
+--- a/Objects/bytes_methods.c
++++ b/Objects/bytes_methods.c
+@@ -242,6 +242,44 @@ _Py_bytes_istitle(const char *cptr, Py_ssize_t len)
+ }
+ 
+ 
++/* Flip 0x20 in each byte of the word at src + i that is in first..first+25,
++   given 0x80 - first and 0x80 - first - 26 in every byte of ge and gt.  For
++   a byte c < 0x80, c + ge has its high bit set iff c >= first, and c + gt
++   iff c > first + 25; neither sum carries.  "& ~x" drops bytes >= 0x80. */
++static inline Py_ALWAYS_INLINE void
++ascii_case_word(char *dst, const char *src, Py_ssize_t i, size_t ge, size_t gt)
++{
++    const size_t ones = (size_t)-1 / 0xff;  /* 0x01 in every byte */
++    size_t x, b;
++    memcpy(&x, src + i, sizeof(x));
++    b = x & (0x7f * ones);
++    x ^= ((b + ge) & ~(b + gt) & ~x & (0x80 * ones)) >> 2;
++    memcpy(dst + i, &x, sizeof(x));
++}
++
++/* Requires len >= SIZEOF_SIZE_T; the last word may overlap.  Not inlined,
++   so short strings skip setup. */
++static Py_NO_INLINE void
++ascii_case_words(char *dst, const char *src, Py_ssize_t len, int first)
++{
++    const size_t ones = (size_t)-1 / 0xff;
++    size_t ge = (0x80 - first) * ones, gt = (0x80 - first - 26) * ones;
++    Py_ssize_t i;
++#if defined(_MSC_VER) && !defined(__clang__)
++    /* MSVC vectorizes only loops that count by one; clang turns those into
++       post-indexed accesses on AArch64, slower on Apple cores. */
++    Py_ssize_t n = (size_t)(len - 1) / SIZEOF_SIZE_T;
++    for (i = 0; i < n; i++) {
++        ascii_case_word(dst, src, i * SIZEOF_SIZE_T, ge, gt);
++    }
++#else
++    for (i = 0; i < len - SIZEOF_SIZE_T; i += SIZEOF_SIZE_T) {
++        ascii_case_word(dst, src, i, ge, gt);
++    }
++#endif
++    ascii_case_word(dst, src, len - SIZEOF_SIZE_T, ge, gt);
++}
++
+ PyDoc_STRVAR_shared(_Py_lower__doc__,
+ "B.lower() -> copy of B\n\
+ \n\
+@@ -252,6 +290,10 @@ _Py_bytes_lower(char *result, const char *cptr, Py_ssize_t len)
+ {
+     Py_ssize_t i;
+ 
++    if (len >= SIZEOF_SIZE_T) {
++        ascii_case_words(result, cptr, len, 'A');
++        return;
++    }
+     for (i = 0; i < len; i++) {
+         result[i] = Py_TOLOWER((unsigned char) cptr[i]);
+     }
+@@ -268,6 +310,10 @@ _Py_bytes_upper(char *result, const char *cptr, Py_ssize_t len)
+ {
+     Py_ssize_t i;
+ 
++    if (len >= SIZEOF_SIZE_T) {
++        ascii_case_words(result, cptr, len, 'a');
++        return;
++    }
+     for (i = 0; i < len; i++) {
+         result[i] = Py_TOUPPER((unsigned char) cptr[i]);
+     }

@@ -1,5 +1,5 @@
 """Make a standalone test of a variant's word and block helpers: the code
-from "/* Return 0x20 in each byte of x" up to the lower() docstring, copied
+from the end of _Py_bytes_istitle() up to the lower() docstring, copied
 verbatim from a patched Objects/bytes_methods.c, between a small prelude
 (the Python.h names it uses) and an exhaustive check against a per-byte
 reference.
@@ -74,7 +74,8 @@ int main(void)
 """
 
 src = open(sys.argv[1], encoding="utf-8").read()
-start = src.index("/* Return 0x20 in each byte of x")
+# The helpers start after _Py_bytes_istitle(), whatever their first comment says.
+start = src.index("\n}\n", src.index("\n_Py_bytes_istitle(")) + 3
 end = src.index("PyDoc_STRVAR_shared(_Py_lower__doc__")
 code = src[start:end]
 # Only the helpers: stop before the first function that needs Python.h.

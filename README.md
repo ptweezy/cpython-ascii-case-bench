@@ -43,6 +43,12 @@ The `variants` workflow compares several versions of the change (the patches in 
 - `varO` is `varN` with the 32-byte vector block for every gcc/clang build on 64-bit x86 and arm64, not only with AVX2. On arm64 it matches clang's unrolled loop for the PR; on x86-64 without AVX2 gcc lowers the 32-byte vector badly (in PGO builds slower than `main`).
 - `varB` is the recommendation in [`VARIANTS.md`](VARIANTS.md): the GNU vector block for gcc and clang on 64-bit x86 and arm64 (32 bytes on arm64 and with AVX2, 16 bytes with SSE2), the two-word array block only for 64-bit MSVC, and the PR's word loop, unchanged, everywhere else (32-bit targets, where MSVC leaves the four-word array block scalar in PGO builds and slower than the word loop otherwise; clang-cl; other targets). It compiles to `varT`'s code on x86-64 without AVX2, `varN`'s with AVX2, `varO`'s on arm64, and the PR's on 32-bit Windows.
 - `varB5` is `varB` plus a 64-byte vector block where `__AVX512F__` is defined (`-march=x86-64-v4`). Elsewhere it compiles to `varB`'s code. In uv's x86-64-v4 configuration (measured with clang 21 PGO+LTO; uv's own builds use clang 23) it measured 0.39-0.78x `varB` at 64K on Intel Xeons, so it isn't offered.
+- The `cmp*` variants are compact versions, against the issue's estimate of about 35 lines:
+  - `cmpA` (50 non-blank lines, one `#ifdef _MSC_VER`, plain C): on 64-bit targets, 16-byte blocks of two words first, then the word loop counting by one for every compiler. The block is a two-iteration loop under MSVC (which vectorizes that loop but not straight-line code) and two straight-line statements elsewhere (which gcc 16 keeps vectorized in PGO-cold code, unlike the loop).
+  - `cmpB` (46 lines, no `#if`) is `cmpA` with the loop form of the block for every compiler.
+  - `cmpM` (35 lines, no `#if`) is the PR's design made smaller: one count-by-one word loop for every compiler.
+  - `cmpMi` (44 lines) is `cmpM` with the PR's MSVC-only loop kept; it compiles to the PR's loops.
+  - `cmpT` (88 lines) is `varB` in fewer lines, with the same machine code on every target checked (`tests/same_code.sh`).
 - `varW` is `varL` (overlapping words for strings shorter than a word) plus `varV`'s `__builtin_memcpy`. On shuffled real-world length mixes (`realworld/`), `varL` was the fastest short path on an Apple M4 and on x86 with gcc and clang, release and PGO.
 
 ```
