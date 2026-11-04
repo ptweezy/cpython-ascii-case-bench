@@ -129,6 +129,10 @@ jobs:
           if [ "$BENCH_BUILD" = o2 ]; then args+=("CFLAGS=-O2"); fi
           if [ "$BENCH_BUILD" = pgo ]; then args+=(--enable-optimizations --with-lto); fi
           if [ -n "$BENCH_CC" ]; then args+=("CC=$BENCH_CC"); "$BENCH_CC" --version | head -n 1; fi
+          # clang's PGO and LTO need llvm-profdata and llvm-ar, which Ubuntu
+          # keeps next to clang in /usr/lib/llvm-N/bin.
+          ccdir=$(dirname "$(readlink -f "$(command -v "${BENCH_CC:-cc}")")")
+          if [ -x "$ccdir/llvm-ar" ]; then export PATH="$ccdir:$PATH"; echo "PATH += $ccdir"; fi
           if [ -n "$BENCH_CFLAGS" ]; then args+=("CFLAGS=$BENCH_CFLAGS"); fi
           mk=()
           if [ -n "$BENCH_PROFILE_TASK" ]; then mk+=("PROFILE_TASK=$BENCH_PROFILE_TASK"); fi
