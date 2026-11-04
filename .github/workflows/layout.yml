@@ -30,6 +30,15 @@ on:
       rounds:
         description: replay rounds
         default: '5'
+      cc:
+        description: compiler (CC), e.g. gcc-14; empty for the runner's default
+        default: ""
+      cflags:
+        description: CFLAGS given to configure (they follow OPT's -O3), e.g. -O2 as Docker's python images append from dpkg-buildflags; overrides the o2 build's -O2
+        default: ""
+      profile_task:
+        description: PROFILE_TASK for pgo builds; empty for CPython's default training
+        default: ""
 
 permissions:
   contents: read
@@ -39,7 +48,7 @@ env:
 
 jobs:
   layout:
-    name: ${{ matrix.os }} / ${{ inputs.build || 'release' }} / run ${{ matrix.rep }}
+    name: ${{ matrix.os }} / ${{ inputs.build || 'release' }} ${{ inputs.cc }} ${{ inputs.cflags }} ${{ inputs.profile_task && 'custom training' || '' }} / run ${{ matrix.rep }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 300
     strategy:
@@ -53,6 +62,9 @@ jobs:
       BENCH_REP: ${{ matrix.rep }}
       VARIANTS: ${{ inputs.variants || 'varJ varV varW varX' }}
       PADS: ${{ inputs.pads || '0 16 32 48 1024 2064 3104 4080' }}
+      BENCH_CC: ${{ inputs.cc }}
+      BENCH_CFLAGS: ${{ inputs.cflags }}
+      BENCH_PROFILE_TASK: ${{ inputs.profile_task }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -65,8 +77,18 @@ jobs:
           path: base
           persist-credentials: false
       - uses: actions/setup-python@v5
+        id: setup-python
+        continue-on-error: true  # new runner images may lack a prebuilt 3.13
         with:
           python-version: "3.13"
+      - name: Fall back to the system python3
+        if: steps.setup-python.outcome != 'success'
+        shell: bash
+        run: |
+          mkdir -p "$HOME/bin"
+          ln -sf "$(command -v python3)" "$HOME/bin/python"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+          python3 --version
 
       - name: Make variant trees
         shell: bash
@@ -84,14 +106,34 @@ jobs:
           args=(-q)
           if [ "$BENCH_BUILD" = o2 ]; then args+=("CFLAGS=-O2"); fi
           if [ "$BENCH_BUILD" = pgo ]; then args+=(--enable-optimizations --with-lto); fi
+          if [ -n "$BENCH_CC" ]; then args+=("CC=$BENCH_CC"); "$BENCH_CC" --version | head -n 1; fi
+          if [ -n "$BENCH_CFLAGS" ]; then args+=("CFLAGS=$BENCH_CFLAGS"); fi
+          mk=()
+          if [ -n "$BENCH_PROFILE_TASK" ]; then mk+=("PROFILE_TASK=$BENCH_PROFILE_TASK"); fi
           echo "configure ${args[*]}"
+          echo "make ${mk[*]}"
           jobs=$(getconf _NPROCESSORS_ONLN)
           for t in base $VARIANTS; do
-            if ! (cd $t && ./configure "${args[@]}" > ../configure-$t.log 2>&1 && make -j$jobs > ../make-$t.log 2>&1); then
+            if ! (cd $t && ./configure "${args[@]}" > ../configure-$t.log 2>&1 && make -j$jobs "${mk[@]}" > ../make-$t.log 2>&1); then
               tail -n 60 configure-$t.log make-$t.log; exit 1
             fi
             echo "built $t"
           done
+
+      - name: Count SIMD instructions in the case-conversion code
+        shell: bash
+        run: |
+          # Whether the compiler vectorized each tree's loop: SSE/AVX
+          # registers on x86, NEON vector registers on arm64.
+          mkdir -p results
+          for t in base $VARIANTS; do
+            for f in ascii_case_words _Py_bytes_lower; do
+              n=$(objdump -d --no-show-raw-insn $t/python 2>/dev/null \
+                  | awk -v f="$f" '$0 ~ "^[0-9a-f]+ <_?" f "[.>]" {on=1; next} /^[0-9a-f]+ </ {on=0} on' \
+                  | grep -cE '%[xy]mm|[^a-z0-9_]v[0-9]+\.|[^a-z0-9_]q[0-9]+([^0-9]|$)' || true)
+              echo "$t $f $n"
+            done
+          done | tee results/simd.txt
 
       - name: Relink with each shift
         shell: bash
@@ -139,7 +181,8 @@ jobs:
           sys.path.insert(0, "harness")
           import bench
           meta = {k: os.environ.get(v, "") for k, v in
-                  (("runner", "BENCH_RUNNER"), ("build", "BENCH_BUILD"), ("rep", "BENCH_REP"), ("pads", "PADS"))}
+                  (("runner", "BENCH_RUNNER"), ("build", "BENCH_BUILD"), ("rep", "BENCH_REP"), ("pads", "PADS"),
+                   ("cc", "BENCH_CC"), ("cflags", "BENCH_CFLAGS"), ("profile_task", "BENCH_PROFILE_TASK"))}
           meta["cpu"] = bench.cpu_model()
           meta["machine"] = __import__("platform").machine()
           for t in ["base"] + os.environ["VARIANTS"].split():
