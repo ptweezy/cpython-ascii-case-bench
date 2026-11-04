@@ -161,7 +161,9 @@ jobs:
               objdump -d --no-show-raw-insn $t/$bin 2>/dev/null \
                 | awk -v f="$f" '$0 ~ "^[0-9a-f]+ <_?" f "[.>]" {on=1; next} /^[0-9a-f]+ </ {on=0} on' > body.s
               if [ -s body.s ]; then
-                n=$(grep -cE '%[xy]mm|[^a-z0-9_]v[0-9]+\.|[^a-z0-9_]q[0-9]+([^0-9]|$)' body.s || true)
+                # x86 xmm/ymm/zmm; arm64 v and q registers, as "v0.16b" (GNU
+                # objdump) or "and.16b v0, v1, v2" (Apple's objdump).
+                n=$(grep -cE '%[xyz]mm|[^a-z0-9_]v[0-9]+(\.|,|$)|[^a-z0-9_]q[0-9]+([^0-9]|$)' body.s || true)
               else
                 n=missing
               fi

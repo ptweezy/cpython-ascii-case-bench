@@ -1,7 +1,7 @@
 diff --git a/Objects/bytes_methods.c b/Objects/bytes_methods.c
 --- a/Objects/bytes_methods.c
 +++ b/Objects/bytes_methods.c
-@@ -242,6 +242,115 @@
+@@ -242,6 +242,116 @@
  }
  
  
@@ -61,9 +61,10 @@ diff --git a/Objects/bytes_methods.c b/Objects/bytes_methods.c
 +    memcpy(result + i, &x, sizeof(x));
 +}
 +#elif defined(_MSC_VER) && !defined(__clang__) && SIZEOF_SIZE_T == 8
-+/* Convert 16 bytes as an array of two words, which MSVC vectorizes also
-+   where PGO finds this loop cold (unlike the word loop below).  On 32-bit
-+   targets it doesn't, so they keep the word loop. */
++/* Convert 16 bytes as an array of two words, which MSVC vectorizes on
++   x64 also where PGO finds this loop cold, unlike the word loop below.
++   32-bit targets keep the word loop: there the block of four words is
++   scalar in PGO builds and slower than the word loop otherwise. */
 +#define ASCII_CASE_BLOCK 16
 +
 +static inline Py_ALWAYS_INLINE void
@@ -117,7 +118,7 @@ diff --git a/Objects/bytes_methods.c b/Objects/bytes_methods.c
  PyDoc_STRVAR_shared(_Py_lower__doc__,
  "B.lower() -> copy of B\n\
  \n\
-@@ -252,6 +361,10 @@
+@@ -252,6 +362,10 @@
  {
      Py_ssize_t i;
  
@@ -128,7 +129,7 @@ diff --git a/Objects/bytes_methods.c b/Objects/bytes_methods.c
      for (i = 0; i < len; i++) {
          result[i] = Py_TOLOWER((unsigned char) cptr[i]);
      }
-@@ -268,6 +381,10 @@
+@@ -268,6 +382,10 @@
  {
      Py_ssize_t i;
  
