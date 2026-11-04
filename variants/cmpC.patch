@@ -1,0 +1,83 @@
+diff --git a/Objects/bytes_methods.c b/Objects/bytes_methods.c
+index 414afeb..2affe00 100644
+--- a/Objects/bytes_methods.c
++++ b/Objects/bytes_methods.c
+@@ -242,6 +242,56 @@ _Py_bytes_istitle(const char *cptr, Py_ssize_t len)
+ }
+ 
+ 
++/* Return x with 0x20 XORed into each byte in first..first+25, given
++   0x80 - first and 0x80 - first - 26 in every byte of ge and gt: for a
++   byte b < 0x80, b + ge has its high bit set iff b >= first and b + gt iff
++   b > first + 25, and neither sum carries.  "| x" drops bytes >= 0x80. */
++static inline Py_ALWAYS_INLINE size_t
++ascii_case_conv(size_t x, size_t ge, size_t gt)
++{
++    const size_t high = (size_t)-1 / 0xff * 0x80;  /* 0x80 in every byte */
++    size_t b = x & ~high;
++    return x ^ (((b + ge) & ~((b + gt) | x) & high) >> 2);
++}
++
++/* Requires len >= SIZEOF_SIZE_T.  64-bit targets take 16-byte blocks first,
++   vectorized also where PGO finds this cold (32-bit MSVC doesn't).  The last
++   word may overlap (harmless).  Not inlined, so short strings skip setup. */
++static Py_NO_INLINE void
++ascii_case_words(char *result, const char *cptr, Py_ssize_t len, int first)
++{
++    const size_t ones = (size_t)-1 / 0xff;
++    size_t ge = (0x80 - first) * ones, gt = (0x80 - first - 26) * ones, w;
++    size_t m = SIZEOF_SIZE_T == 8 ? (size_t)(len - 1) / 16 * 16 : 0;
++    for (size_t i = 0; i < m; i += 16) {
++#ifdef _MSC_VER  /* MSVC vectorizes this loop but not separate words */
++        size_t x[2];
++        memcpy(x, cptr + i, sizeof(x));
++        for (int k = 0; k < 2; k++) {
++            x[k] = ascii_case_conv(x[k], ge, gt);
++        }
++        memcpy(result + i, x, sizeof(x));
++#else  /* gcc 16 vectorizes two separate words, not an array, when cold */
++        size_t x, y;
++        memcpy(&x, cptr + i, sizeof(x));
++        memcpy(&y, cptr + i + sizeof(x), sizeof(y));
++        x = ascii_case_conv(x, ge, gt);
++        y = ascii_case_conv(y, ge, gt);
++        memcpy(result + i, &x, sizeof(x));
++        memcpy(result + i + sizeof(x), &y, sizeof(y));
++#endif
++    }
++    size_t n = (size_t)(len - 1) / SIZEOF_SIZE_T;  /* counts by one for MSVC */
++    for (size_t i = m / SIZEOF_SIZE_T; i < n; i++) {
++        memcpy(&w, cptr + i * SIZEOF_SIZE_T, sizeof(w));
++        w = ascii_case_conv(w, ge, gt);
++        memcpy(result + i * SIZEOF_SIZE_T, &w, sizeof(w));
++    }
++    memcpy(&w, cptr + len - SIZEOF_SIZE_T, sizeof(w));
++    w = ascii_case_conv(w, ge, gt);
++    memcpy(result + len - SIZEOF_SIZE_T, &w, sizeof(w));
++}
++
+ PyDoc_STRVAR_shared(_Py_lower__doc__,
+ "B.lower() -> copy of B\n\
+ \n\
+@@ -252,6 +302,10 @@ _Py_bytes_lower(char *result, const char *cptr, Py_ssize_t len)
+ {
+     Py_ssize_t i;
+ 
++    if (len >= SIZEOF_SIZE_T) {
++        ascii_case_words(result, cptr, len, 'A');
++        return;
++    }
+     for (i = 0; i < len; i++) {
+         result[i] = Py_TOLOWER((unsigned char) cptr[i]);
+     }
+@@ -268,6 +322,10 @@ _Py_bytes_upper(char *result, const char *cptr, Py_ssize_t len)
+ {
+     Py_ssize_t i;
+ 
++    if (len >= SIZEOF_SIZE_T) {
++        ascii_case_words(result, cptr, len, 'a');
++        return;
++    }
+     for (i = 0; i < len; i++) {
+         result[i] = Py_TOUPPER((unsigned char) cptr[i]);
+     }

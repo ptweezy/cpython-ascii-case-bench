@@ -46,6 +46,7 @@ The `variants` workflow compares several versions of the change (the patches in 
 - The `cmp*` variants are compact versions, against the issue's estimate of about 35 lines:
   - `cmpA` (50 non-blank lines, one `#ifdef _MSC_VER`, plain C): on 64-bit targets, 16-byte blocks of two words first, then the word loop counting by one for every compiler. The block is a two-iteration loop under MSVC (which vectorizes that loop but not straight-line code) and two straight-line statements elsewhere (which gcc 16 keeps vectorized in PGO-cold code, unlike the loop).
   - `cmpB` (46 lines, no `#if`) is `cmpA` with the loop form of the block for every compiler.
+  - `cmpC` (56 lines) is `cmpA` with the block as two separate words (two loads into two variables) outside MSVC: in Fedora's gcc 16 PGO build `cmpA`'s two statements on an array stayed scalar, while `varX`'s separate words were vectorized.
   - `cmpM` (35 lines, no `#if`) is the PR's design made smaller: one count-by-one word loop for every compiler.
   - `cmpMi` (44 lines) is `cmpM` with the PR's MSVC-only loop kept; it compiles to the PR's loops.
   - `cmpT` (88 lines) is `varB` in fewer lines, with the same machine code on every target checked (`tests/same_code.sh`).
