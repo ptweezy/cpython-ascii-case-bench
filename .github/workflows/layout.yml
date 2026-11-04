@@ -152,12 +152,19 @@ jobs:
         run: |
           # Whether the compiler vectorized each tree's loop: SSE/AVX
           # registers on x86, NEON vector registers on arm64.
+          # On macOS the binary is python.exe.  A function that isn't found
+          # (inlined, or renamed) is reported as "missing", not as 0.
           mkdir -p results
+          bin=python; [ -x base/python.exe ] && bin=python.exe
           for t in base $VARIANTS; do
             for f in ascii_case_words _Py_bytes_lower; do
-              n=$(objdump -d --no-show-raw-insn $t/python 2>/dev/null \
-                  | awk -v f="$f" '$0 ~ "^[0-9a-f]+ <_?" f "[.>]" {on=1; next} /^[0-9a-f]+ </ {on=0} on' \
-                  | grep -cE '%[xy]mm|[^a-z0-9_]v[0-9]+\.|[^a-z0-9_]q[0-9]+([^0-9]|$)' || true)
+              objdump -d --no-show-raw-insn $t/$bin 2>/dev/null \
+                | awk -v f="$f" '$0 ~ "^[0-9a-f]+ <_?" f "[.>]" {on=1; next} /^[0-9a-f]+ </ {on=0} on' > body.s
+              if [ -s body.s ]; then
+                n=$(grep -cE '%[xy]mm|[^a-z0-9_]v[0-9]+\.|[^a-z0-9_]q[0-9]+([^0-9]|$)' body.s || true)
+              else
+                n=missing
+              fi
               echo "$t $f $n"
             done
           done | tee results/simd.txt
