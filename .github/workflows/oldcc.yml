@@ -1,0 +1,56 @@
+name: oldcc
+
+# Builds the variants' word and block helpers with old compilers: every gcc
+# and clang that Ubuntu 16.04, 18.04 and 20.04 package (gcc 4.7 to 10, clang
+# 3.5 to 12), on x86-64 and arm64.  The helpers are copied verbatim from
+# CPython's Objects/bytes_methods.c with each patch applied
+# (oldcc/make_test.py) and checked exhaustively against a per-byte
+# reference.  GNU vector code once broke the build on old clang
+# (gh-148474), so this covers the compilers the runners no longer ship.
+
+on:
+  workflow_dispatch:
+    inputs:
+      variants:
+        description: patch names in variants/, without .patch
+        default: "varJ varR varT varN"
+
+permissions:
+  contents: read
+
+env:
+  CPYTHON_BASE: 4e0677ac610d9e890503fc0c0ca8351bfdd5f000
+
+jobs:
+  oldcc:
+    name: ${{ matrix.image }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+        image: ["ubuntu:16.04", "ubuntu:18.04", "ubuntu:20.04"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Make one test per variant
+        env:
+          VARIANTS: ${{ inputs.variants }}
+        run: |
+          mkdir work
+          curl -fsSL "https://raw.githubusercontent.com/python/cpython/$CPYTHON_BASE/Objects/bytes_methods.c" -o work/main.c
+          for v in $VARIANTS; do
+            cp work/main.c work/$v.c
+            patch -s work/$v.c < variants/$v.patch
+            python3 oldcc/make_test.py work/$v.c work/test-$v.c
+          done
+          cp oldcc/run_all.sh work/
+          ls -l work
+      - name: Build and check with every compiler in the image
+        run: |
+          set -o pipefail
+          docker run --rm -v "$PWD/work:/w" -w /w "${{ matrix.image }}" bash run_all.sh | tee work/oldcc.md
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: oldcc-${{ matrix.os }}-${{ strategy.job-index }}
+          path: work/oldcc.md
