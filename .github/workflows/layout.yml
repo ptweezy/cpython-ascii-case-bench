@@ -42,6 +42,10 @@ on:
       container:
         description: Fedora image to run the job in, e.g. fedora:44 for its gcc; empty to run on the runner
         default: ""
+      keep_binaries:
+        description: also upload each tree's python binary (to compare code between builds)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -238,6 +242,39 @@ jobs:
           done
           python harness/realworld/len_layout.py results/lengths.json 3 $lens
           python harness/realworld/len_layout_summary.py results/lengths.json | tee results/lengths.md
+
+      - name: Control operations over every build and shift
+        shell: bash
+        env:
+          REPLAY_CPU: "1"
+        run: |
+          # String operations that don't reach the case code: shows whether a
+          # tree's build as a whole is faster or slower (PGO varies).
+          specs=""
+          for t in base $VARIANTS; do
+            for p in $PADS; do
+              name=$t.p$p
+              [ $t = base ] && name=main.p$p
+              specs="$specs $name=$t/python-pad$p"
+            done
+          done
+          python harness/realworld/control.py results/control.json 3 $specs
+          python harness/realworld/control.py --summary results/control.json | tee results/control.md
+
+      - name: Pack the binaries
+        if: inputs.keep_binaries
+        shell: bash
+        run: |
+          mkdir -p binaries
+          for t in base $VARIANTS; do cp $t/python-pad0 binaries/python-$t; done
+          tar czf binaries.tar.gz binaries
+          ls -l binaries.tar.gz
+
+      - uses: actions/upload-artifact@v4
+        if: inputs.keep_binaries
+        with:
+          name: binaries-${{ matrix.os }}-${{ inputs.build || 'release' }}-${{ matrix.rep }}
+          path: binaries.tar.gz
 
       - uses: actions/upload-artifact@v4
         if: always()
