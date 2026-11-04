@@ -10,12 +10,19 @@ apt-get update -qq > /dev/null
 cands="gcc-4.7 gcc-4.8 gcc-4.9 gcc-5 gcc-6 gcc-7 gcc-8 gcc-9 gcc-10
        clang-3.3 clang-3.4 clang-3.5 clang-3.6 clang-3.7 clang-3.8 clang-3.9 clang-4.0
        clang-5.0 clang-6.0 clang-7 clang-8 clang-9 clang-10 clang-11 clang-12"
+if ! apt-get install -y -qq gcc libc6-dev binutils > /tmp/apt.log 2>&1; then
+  echo "apt-get install gcc failed"; tail -n 20 /tmp/apt.log; exit 1
+fi
+# One package at a time, so that one that won't install skips only itself.
 avail=""
 for p in $cands; do
-  if apt-cache show "$p" > /dev/null 2>&1; then avail="$avail $p"; fi
+  apt-cache show "$p" > /dev/null 2>&1 || continue
+  if apt-get install -y -qq --no-install-recommends "$p" > /tmp/apt.log 2>&1 && command -v "$p" > /dev/null; then
+    avail="$avail $p"
+  else
+    echo "($p would not install: $(tail -n 1 /tmp/apt.log))"
+  fi
 done
-apt-get install -y -qq gcc libc6-dev binutils $avail > /dev/null 2>&1 \
-  || { echo "apt-get install failed"; exit 1; }
 . /etc/os-release
 echo "$PRETTY_NAME, $(uname -m), compilers:$avail"
 flagsets=("-O0" "-O1" "-O2" "-O3" "-Os")
