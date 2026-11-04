@@ -39,6 +39,9 @@ on:
       profile_task:
         description: PROFILE_TASK for pgo builds; empty for CPython's default training
         default: ""
+      container:
+        description: Fedora image to run the job in, e.g. fedora:44 for its gcc; empty to run on the runner
+        default: ""
 
 permissions:
   contents: read
@@ -48,8 +51,9 @@ env:
 
 jobs:
   layout:
-    name: ${{ matrix.os }} / ${{ inputs.build || 'release' }} ${{ inputs.cc }} ${{ inputs.cflags }} ${{ inputs.profile_task && 'custom training' || '' }} / run ${{ matrix.rep }}
+    name: ${{ matrix.os }} ${{ inputs.container }} / ${{ inputs.build || 'release' }} ${{ inputs.cc }} ${{ inputs.cflags }} ${{ inputs.profile_task && 'custom training' || '' }} / run ${{ matrix.rep }}
     runs-on: ${{ matrix.os }}
+    container: ${{ inputs.container || null }}
     timeout-minutes: 300
     strategy:
       fail-fast: false
@@ -65,7 +69,20 @@ jobs:
       BENCH_CC: ${{ inputs.cc }}
       BENCH_CFLAGS: ${{ inputs.cflags }}
       BENCH_PROFILE_TASK: ${{ inputs.profile_task }}
+      BENCH_CONTAINER: ${{ inputs.container }}
     steps:
+      - name: Install build tools in the container
+        if: inputs.container != ''
+        shell: bash
+        run: |
+          # Before checkout, so that it makes git clones (the variant trees
+          # are git worktrees of base).
+          dnf -y -q install --skip-unavailable git gcc make binutils python3 gawk sed grep \
+            findutils diffutils which procps-ng util-linux libffi-devel openssl-devel \
+            zlib-ng-compat-devel bzip2-devel xz-devel sqlite-devel readline-devel \
+            ncurses-devel gdbm-devel libuuid-devel expat-devel
+          git config --global --add safe.directory '*'
+          gcc --version | head -n 1
       - uses: actions/checkout@v4
         with:
           path: harness
@@ -78,6 +95,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@v5
         id: setup-python
+        if: inputs.container == ''
         continue-on-error: true  # new runner images may lack a prebuilt 3.13
         with:
           python-version: "3.13"
@@ -182,7 +200,8 @@ jobs:
           import bench
           meta = {k: os.environ.get(v, "") for k, v in
                   (("runner", "BENCH_RUNNER"), ("build", "BENCH_BUILD"), ("rep", "BENCH_REP"), ("pads", "PADS"),
-                   ("cc", "BENCH_CC"), ("cflags", "BENCH_CFLAGS"), ("profile_task", "BENCH_PROFILE_TASK"))}
+                   ("cc", "BENCH_CC"), ("cflags", "BENCH_CFLAGS"), ("profile_task", "BENCH_PROFILE_TASK"),
+                   ("container", "BENCH_CONTAINER"))}
           meta["cpu"] = bench.cpu_model()
           meta["machine"] = __import__("platform").machine()
           for t in ["base"] + os.environ["VARIANTS"].split():
