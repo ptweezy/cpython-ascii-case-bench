@@ -34,6 +34,11 @@ for v in $VARIANTS; do
     git -C $v checkout -- .
   fi
   if git -C $v diff HEAD --quiet; then echo "$v: patch not applied"; exit 1; fi
+  # A tree (and its build) from an earlier run of a different patch would
+  # otherwise be reused silently.
+  if ! git -C $v apply --check -R "$H/variants/$v.patch" 2>/dev/null; then
+    echo "$v: tree doesn't match variants/$v.patch; delete $W/$v and re-run"; exit 1
+  fi
   echo "$v: $(git -C $v diff HEAD --stat | tail -n 1)"
 done
 
@@ -56,6 +61,7 @@ done
 for t in base $VARIANTS; do
   addrs=""
   for p in $PADS; do
+    rm -f $t/python-pad$p  # else make -n says it is up to date on a re-run
     cmd=$(cd $t && make -n python-pad$p BUILDPYTHON=python-pad$p | tail -n 1)
     # sed, not ${cmd/.../...}: bash 3.2 (macOS /bin/bash) mangles that here.
     new=$(printf '%s' "$cmd" | sed "s| -o python-pad$p Programs/python.o | -o python-pad$p $PWD/pad$p.o Programs/python.o |")
