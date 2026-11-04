@@ -19,7 +19,7 @@ on:
         description: JSON list of runner labels (Linux and macOS)
         default: '["ubuntu-24.04", "ubuntu-24.04-arm", "macos-15", "macos-15-intel"]'
       build:
-        description: release, or o2 (CFLAGS=-O2, after configure's -O3, as distributions build)
+        description: release, o2 (CFLAGS=-O2, after configure's -O3, as distributions build) or pgo (--enable-optimizations --with-lto)
         default: release
       reps:
         description: JSON list of job numbers per runner (each job may get a different CPU)
@@ -83,6 +83,7 @@ jobs:
         run: |
           args=(-q)
           if [ "$BENCH_BUILD" = o2 ]; then args+=("CFLAGS=-O2"); fi
+          if [ "$BENCH_BUILD" = pgo ]; then args+=(--enable-optimizations --with-lto); fi
           echo "configure ${args[*]}"
           jobs=$(getconf _NPROCESSORS_ONLN)
           for t in base $VARIANTS; do
@@ -159,6 +160,22 @@ jobs:
           done
           python harness/realworld/replay_drive.py harness/realworld/hist results/layout $ROUNDS $specs > results/layout-drive.txt
           python harness/realworld/layout_summary.py results/layout/times.json | tee results/layout.md
+
+      - name: Fixed lengths over every build and shift
+        shell: bash
+        env:
+          REPLAY_CPU: "1"
+        run: |
+          lens=""
+          for t in base $VARIANTS; do
+            for p in $PADS; do
+              name=$t.p$p
+              [ $t = base ] && name=main.p$p
+              lens="$lens $name=$t/python-pad$p"
+            done
+          done
+          python harness/realworld/len_layout.py results/lengths.json 3 $lens
+          python harness/realworld/len_layout_summary.py results/lengths.json | tee results/lengths.md
 
       - uses: actions/upload-artifact@v4
         if: always()
