@@ -28,7 +28,18 @@ Speedups are time on `main` / time with the build. "Layout" jobs relink each bui
 
 At 64K characters: Apple M4 3.38x to 5.71x (1.69x), M1 3.65x to 7.69x (2.11x), Intel Mac 2.86x to 5.26x (1.84x), clang 21 2.82-3.59x to 6.16-6.37x (1.77-2.18x). On gcc PGO x86-64 it varies by job, from 0.84x to 1.24x the previous revision (whole-build PGO variation; both are vectorized with the tests), and it is a tie on the local Fedora recipe and gcc 16 layout runs (0.98-1.03x). On gcc arm64 it is 0.99-1.02x.
 
-`str.upper()` gives the same ratios. Windows x64: 1.60-1.65x the previous revision at 1,024 for `str` and `bytes`, `lower()` and `upper()`. MacBook Air PGO: `upper()` 1.73x at 1,024 and 1.65x at 64K. Fedora recipe: 0.99-1.03x at 64K.
+`str.upper()` gives the same ratios. Windows x64: 1.60-1.65x the previous revision at 1,024 for `str` and `bytes`, `lower()` and `upper()`. MacBook Air PGO: `upper()` 1.73x at 1,024 and 1.65x at 64K. Fedora recipe: 0.99-1.03x at 64K. The `u-*` runs repeat every layout run with `upper()` timed too; per run, `upper()` is within 0.04 of `lower()` at 1,024 and 64K, except on the macOS runners at 64K, where it is a little ahead (2.03x against 1.93x). Geometric mean over each run's jobs, proposed / previous at 1,024 and at 64K:
+
+| Run | `lower()` | `upper()` |
+|---|---|---|
+| clang 21 PGO+LTO | 1.58x, 2.25x | 1.57x, 2.25x |
+| Apple clang 17 PGO+LTO (M1, Intel) | 1.39x, 1.93x | 1.43x, 2.03x |
+| fedora:44 gcc 16 PGO+LTO | 1.03x, 1.10x | 1.03x, 1.07x |
+| gcc 13 PGO+LTO | 0.95x, 0.98x | 0.96x, 0.98x |
+| gcc 13 release | 1.03x, 1.04x | 1.03x, 1.04x |
+| gcc 13 `-fno-tree-vectorize` | 1.11x, 1.19x | 1.11x, 1.19x |
+| clang 18 `-fno-vectorize -fno-slp-vectorize` | 0.99x, 0.99x | 0.99x, 0.99x |
+| clang 18 release | 0.92x, 0.80x | 0.92x, 0.81x |
 
 ## Builds without PGO
 
@@ -45,7 +56,9 @@ With the auto-vectorizer off, neither revision has vector instructions in `ascii
 
 ## Short strings
 
-Over 22 jobs (18 runner layout jobs, the MacBook Air's two runs and the local gcc and clang layout runs), the real-world short-string mix (`realworld/`) is 1.009x the previous revision (geometric mean; 95% interval 0.998-1.021; per job 0.972-1.072). Strings shorter than 8 bytes take the unchanged byte loop. At 16 and 32 characters the geometric mean over the runner jobs is 1.005x. On Windows x64 PGO, 8 and 16 characters are 0.98-1.00x the previous revision.
+Over 42 jobs (38 runner layout jobs from the `f-*` and `u-*` runs, the MacBook Air's two runs and the local gcc and clang layout runs), the real-world short-string mix (`realworld/`) is 1.001x the previous revision (geometric mean; 95% interval 0.988-1.014; per job 0.891-1.119). Divided by the control (string operations that never reach this code, `realworld/control.py`), the 38 runner jobs give 1.002x (0.993-1.012). Strings shorter than 8 bytes take the unchanged byte loop.
+
+Whole-build PGO variation is large here: the previous revision's own short mix measured 1.065x `main` in one gcc 13 PGO arm64 job and 1.151x in the same job of the repeat run. The one build where the proposed code is behind in all four jobs is gcc 13 PGO+LTO on arm64: 0.975x on the short mix and 0.970x at 16 characters after the control adjustment (0.946x and 0.942x before it). On gcc 13 PGO x86-64 it is 1.014x, and on every other build 0.99-1.03x. On Windows x64 PGO, 8 and 16 characters are 0.98-1.00x the previous revision.
 
 ## Vector instructions in `ascii_case_words`
 
