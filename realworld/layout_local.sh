@@ -8,7 +8,8 @@
 #
 #   realworld/layout_local.sh WORKDIR "varJ varV ..." [configure args...]
 #
-# Environment: ROUNDS (default 5), PADS (default below), REPLAY_CPU (Linux:
+# Environment: ROUNDS (replay rounds, default 5), LEN_ROUNDS (fixed-length
+# rounds, default 3), PADS (default below), REPLAY_CPU (Linux:
 # pin timed runs to that logical CPU), JOBS (make -j, default all CPUs).
 # Results: WORKDIR/results/{layout.md,lengths.md} plus the raw JSON.
 set -euo pipefail
@@ -17,6 +18,7 @@ W=$1; VARIANTS=$2; shift 2
 CPYTHON_BASE=4e0677ac610d9e890503fc0c0ca8351bfdd5f000
 PADS=${PADS:-"0 16 32 48 1024 2064 3104 4080"}
 ROUNDS=${ROUNDS:-5}
+LEN_ROUNDS=${LEN_ROUNDS:-3}
 JOBS=${JOBS:-$(getconf _NPROCESSORS_ONLN)}
 mkdir -p "$W/results" && cd "$W"
 
@@ -89,7 +91,7 @@ done
 echo "replay, $ROUNDS rounds ($(date +%T))"
 python3 "$H/realworld/replay_drive.py" "$H/realworld/hist" results/layout $ROUNDS $replay > results/layout-drive.txt
 python3 "$H/realworld/layout_summary.py" results/layout/times.json | tee results/layout.md
-echo "fixed lengths, 3 rounds ($(date +%T))"
-python3 "$H/realworld/len_layout.py" results/lengths.json 3 $lens
+echo "fixed lengths, $LEN_ROUNDS rounds ($(date +%T))"
+python3 "$H/realworld/len_layout.py" results/lengths.json $LEN_ROUNDS $lens
 python3 "$H/realworld/len_layout_summary.py" results/lengths.json | tee results/lengths.md
 echo "done ($(date +%T))"
