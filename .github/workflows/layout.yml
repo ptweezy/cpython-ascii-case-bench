@@ -46,6 +46,12 @@ on:
         description: also upload each tree's python binary (to compare code between builds)
         type: boolean
         default: false
+      lens:
+        description: lengths for the fixed-length step, e.g. "0 1 2 3"; empty for 8 16 24 32 64 128 256 1024 4096 65536
+        default: ""
+      len_rounds:
+        description: rounds of the fixed-length step
+        default: '3'
 
 permissions:
   contents: read
@@ -245,6 +251,8 @@ jobs:
         shell: bash
         env:
           REPLAY_CPU: "1"
+          LENS: ${{ inputs.lens }}
+          LEN_ROUNDS: ${{ inputs.len_rounds || '3' }}
         run: |
           lens=""
           for t in base $VARIANTS; do
@@ -254,7 +262,7 @@ jobs:
               lens="$lens $name=$t/python-pad$p"
             done
           done
-          python harness/realworld/len_layout.py results/lengths.json 3 $lens
+          python harness/realworld/len_layout.py results/lengths.json $LEN_ROUNDS $lens
           python harness/realworld/len_layout_summary.py results/lengths.json | tee results/lengths.md
 
       - name: Control operations over every build and shift

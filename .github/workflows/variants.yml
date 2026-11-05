@@ -20,7 +20,7 @@ on:
         description: release, pgo, o2 or novec
         default: release
       bench_set:
-        description: short or full
+        description: short, lengths (every length 0-17 and the edges to 64, plus capitalize) or full
         default: short
       reps:
         description: JSON list of job numbers per runner (each job may get a different CPU)
@@ -31,6 +31,9 @@ on:
       win_opts:
         description: extra build.bat options on x64 Windows, e.g. --tail-call-interp (python.org's 3.15 build)
         default: ""
+      win_plat:
+        description: platform on x64 Windows runners, x64 or Win32 (python.org's 32-bit installer is a Release build)
+        default: x64
 
 permissions:
   contents: read
@@ -56,6 +59,7 @@ jobs:
       BENCH_SET: ${{ inputs.bench_set || 'short' }}
       VARIANTS: ${{ inputs.variants || 'varA varC varD' }}
       WIN_OPTS: ${{ inputs.win_opts || '' }}
+      WIN_PLAT: ${{ inputs.win_plat || 'x64' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -107,7 +111,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $plat = if ($env:RUNNER_ARCH -eq 'ARM64') { 'ARM64' } else { 'x64' }
+          $plat = if ($env:RUNNER_ARCH -eq 'ARM64') { 'ARM64' } elseif ($env:WIN_PLAT -eq 'Win32') { 'Win32' } else { 'x64' }
           $opts = @()
           if ($env:BENCH_BUILD -eq 'pgo') { $opts += '--pgo' }
           if ($plat -eq 'x64' -and $env:WIN_OPTS) { $opts += $env:WIN_OPTS.Split(' ') }
@@ -152,7 +156,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: variants-${{ matrix.os }}-${{ inputs.build || 'release' }}-${{ matrix.rep }}
+          name: variants-${{ matrix.os }}${{ inputs.win_plat == 'Win32' && '-win32' || '' }}-${{ inputs.build || 'release' }}-${{ matrix.rep }}
           path: |
             results/
             *.log

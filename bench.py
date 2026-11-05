@@ -6,7 +6,9 @@
 
 The builds take turns, one benchmark at a time (and which goes first
 rotates), so slow drift on a shared machine hits them all equally.
-BENCH_SET=short picks a smaller set focused on short strings.
+BENCH_SET=short picks a smaller set focused on short strings;
+BENCH_SET=lengths times every length from 0 to 17 and the word and block
+edges up to 64, plus bytes.capitalize().
 """
 import json
 import os
@@ -15,7 +17,7 @@ import subprocess
 import sys
 
 CANDIDATES = ("python.exe", "python", "PCbuild/amd64/python.exe",
-              "PCbuild/arm64/python.exe")
+              "PCbuild/arm64/python.exe", "PCbuild/win32/python.exe")
 
 
 def which(tree):
@@ -41,8 +43,11 @@ SETUP = (
     " 'Cache-Control', 'Content-Length', 'Accept-Encoding'] * 50"
 )
 
-if os.environ.get("BENCH_SET") == "short":
+BENCH_SET = os.environ.get("BENCH_SET")
+if BENCH_SET == "short":
     SIZES = (1, 5, 7, 8, 16, 32, 1024)
+elif BENCH_SET == "lengths":
+    SIZES = (*range(18), 20, 24, 28, 31, 32, 33, 48, 64, 256, 1024)
 else:
     SIZES = (1, 3, 5, 7, 8, 11, 15, 16, 32, 64, 256, 1024, 65536)
 BENCHES = []
@@ -51,6 +56,10 @@ for n in SIZES:
     BENCHES.append((f"str.upper {n}", f"s = t[:{n}]", "s.upper()"))
     BENCHES.append((f"bytes.lower {n}", f"s = tb[:{n}]", "s.lower()"))
     BENCHES.append((f"bytes.upper {n}", f"s = tb[:{n}]", "s.upper()"))
+if BENCH_SET == "lengths":
+    for n in (1, 2, 5, 9, 10, 13, 16, 32):
+        BENCHES.append((f"bytes.capitalize {n}", f"s = tb[:{n}]",
+                        "s.capitalize()"))
 BENCHES.append(("words (1100, 2-6 chars)", "", "[w.lower() for w in words]"))
 BENCHES.append(("headers (400, 4-15 chars)", "", "[h.lower() for h in hdrs]"))
 

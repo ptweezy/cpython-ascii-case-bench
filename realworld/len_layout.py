@@ -8,20 +8,22 @@ build runs once per round, in an order that rotates each round and is
 reversed on odd rounds; the best time per build, method and length is
 saved: "best" holds every length for lower(), then every length for
 upper(), in the order of "ops".  With REPLAY_CPU=N, each run is pinned to
-logical CPU N (Linux; on Windows also at high priority).
+logical CPU N (Linux; on Windows also at high priority).  LENS="0 1 2 ..."
+replaces the default lengths.
 """
 import json, os, subprocess, sys
 
 out_path, rounds = sys.argv[1], int(sys.argv[2])
 builds = dict(a.split("=", 1) for a in sys.argv[3:])
 cpu = os.environ.get("REPLAY_CPU")
-LENS = (8, 16, 24, 32, 64, 128, 256, 1024, 4096, 65536)
+LENS = (tuple(int(x) for x in os.environ.get("LENS", "").split())
+        or (8, 16, 24, 32, 64, 128, 256, 1024, 4096, 65536))
 OPS = ("lower", "upper")
 # The loop for each method, the same as when only lower() was timed.
 BLOCK = r"""
 for n in %r:
     s = ('AbCdEfGhIjKlMnOp' * (n // 16 + 1))[:n]
-    k = max(3000, 1_000_000 // n)
+    k = max(3000, 1_000_000 // max(n, 1))
     best = 1e9
     for _ in range(5):
         t = time.perf_counter()
