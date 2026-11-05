@@ -1,5 +1,7 @@
 # Which loop to offer for gh-161155
 
+> **Update, 2026-11-05:** the recommendation is now `cmpD` (57 lines in `bytes_methods.c`, plain C, one `#if`) plus the two proposed tests, not `varB`. `cmpD` keeps most of `varB`'s gains in the shipped PGO builds at about the PR's size, without GNU vectors. See [`results/compact.md`](results/compact.md). The rest of this document is the data behind `varB`, which stays available as a follow-up.
+
 This compares the PR's word loop ([python/cpython#161201](https://github.com/python/cpython/pull/161201); its `bytes_methods.c` as of 9433a66, which later commits only merge `main` into) with the variants in `variants/`, in the builds that ship CPython to users. Speedups are time on `main` / time with the variant, so above 1.00x is faster than `main`. "64K" is 65,536 characters.
 
 Names used below:
