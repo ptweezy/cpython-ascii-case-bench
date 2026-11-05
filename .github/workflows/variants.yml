@@ -29,7 +29,7 @@ on:
         description: rounds of the real-world replay
         default: '5'
       win_opts:
-        description: extra PCbuilduild.bat options on x64 Windows, e.g. --tail-call-interp (python.org's 3.15 build)
+        description: extra build.bat options on x64 Windows, e.g. --tail-call-interp (python.org's 3.15 build)
         default: ""
 
 permissions:
