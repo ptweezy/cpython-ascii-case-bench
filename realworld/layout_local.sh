@@ -11,8 +11,10 @@
 # Environment: ROUNDS (replay rounds, default 5), LEN_ROUNDS (fixed-length
 # rounds, default 3), PADS (default below), REPLAY_CPU (Linux:
 # pin timed runs to that logical CPU), JOBS (make -j, default all CPUs),
-# LOAD_MAX (if set, each timing phase first waits, up to 30 minutes, until
-# the 1-minute load average is below it).
+# LOAD_MAX (if set, each timing phase first waits LOAD_MIN_WAIT seconds,
+# default 60, then until two readings 15 s apart have the 1-minute load
+# average below LOAD_MAX and, on macOS, nominal thermal pressure; at most
+# 60 minutes).
 # Results: WORKDIR/results/{layout.md,lengths.md} plus the raw JSON.
 set -euo pipefail
 H=$(cd "$(dirname "$0")/.." && pwd)
@@ -92,15 +94,25 @@ for t in base $VARIANTS; do
 done
 wait_load() {
   [ -n "${LOAD_MAX:-}" ] || return 0
-  local i l
-  for i in $(seq 120); do
+  local i l th ok=0
+  sleep "${LOAD_MIN_WAIT:-60}"
+  for i in $(seq 240); do
     l=$(python3 -c "import os; print(round(os.getloadavg()[0], 2))")
-    if python3 -c "import sys; sys.exit(not $l < $LOAD_MAX)"; then
-      echo "load $l, below $LOAD_MAX ($(date +%T))"; return 0
+    th=""  # macOS thermal pressure level; 0 is nominal
+    if command -v notifyutil > /dev/null 2>&1; then
+      th=$(notifyutil -g com.apple.system.thermalpressurelevel 2>/dev/null | awk '{print $NF}')
+    fi
+    if python3 -c "import sys; sys.exit(not $l < $LOAD_MAX)" && { [ -z "$th" ] || [ "$th" = 0 ]; }; then
+      ok=$((ok + 1))
+      if [ $ok -ge 2 ]; then
+        echo "load $l, below $LOAD_MAX, thermal ${th:-n/a} ($(date +%T))"; return 0
+      fi
+    else
+      ok=0
     fi
     sleep 15
   done
-  echo "load still $l after 30 minutes; timing anyway ($(date +%T))"
+  echo "load $l, thermal ${th:-n/a} after 60 minutes; timing anyway ($(date +%T))"
 }
 wait_load
 echo "replay, $ROUNDS rounds ($(date +%T))"
