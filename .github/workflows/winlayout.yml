@@ -1,0 +1,158 @@
+name: winlayout
+
+# The Windows counterpart of layout.yml.  Code placement alone moves
+# short-string timings on Windows by several percent (main alone swings up
+# to ~9% between placements 16 bytes apart), more than the differences
+# between variants.  Each tree's python3XX.dll is relinked from its own
+# object files at several placements (windows/win_relink.py: a padding
+# object ahead of all code, so every function moves by N bytes and no
+# instruction changes), then str/bytes lower()/upper() are timed at every
+# length over all (tree, placement) builds in alternating rounds
+# (windows/len_layout_win.py), and variants are compared to main by the
+# geomean over placements (windows/perlen.py, windows/summary.py).
+
+on:
+  workflow_dispatch:
+    inputs:
+      variants:
+        description: patch names in variants/, without .patch
+        default: "g1xt"
+      runners:
+        description: JSON list of Windows runner labels
+        default: '["windows-2025"]'
+      build:
+        description: release or pgo
+        default: release
+      reps:
+        description: JSON list of job numbers per runner (each job may get a different CPU)
+        default: '[1, 2]'
+      pads:
+        description: placements in bytes, multiples of 16 up to 4080
+        default: "0 16 32 48 1024 2064 3104 4080"
+      rounds:
+        description: alternating timing rounds
+        default: '12'
+      win_opts:
+        description: extra build.bat options on x64, e.g. --tail-call-interp
+        default: ""
+
+permissions:
+  contents: read
+
+env:
+  CPYTHON_BASE: 4e0677ac610d9e890503fc0c0ca8351bfdd5f000
+
+jobs:
+  bench:
+    name: ${{ matrix.os }} / ${{ inputs.build }} / run ${{ matrix.rep }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(inputs.runners) }}
+        rep: ${{ fromJSON(inputs.reps) }}
+    env:
+      BENCH_BUILD: ${{ inputs.build }}
+      VARIANTS: ${{ inputs.variants }}
+      PADS: ${{ inputs.pads }}
+      ROUNDS: ${{ inputs.rounds }}
+      WIN_OPTS: ${{ inputs.win_opts }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: harness
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: python/cpython
+          ref: ${{ env.CPYTHON_BASE }}
+          path: base
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Make variant trees
+        shell: bash
+        run: |
+          for v in $VARIANTS; do
+            git -C base worktree add -q --detach ../$v HEAD
+            git -C $v apply --cached ../harness/variants/$v.patch
+            git -C $v checkout -- .
+            git -C $v diff --cached --stat
+          done
+
+      - name: Build
+        shell: pwsh
+        run: |
+          $plat = if ($env:RUNNER_ARCH -eq 'ARM64') { 'ARM64' } else { 'x64' }
+          $opts = @()
+          if ($env:BENCH_BUILD -eq 'pgo') { $opts += '--pgo' }
+          if ($plat -eq 'x64' -and $env:WIN_OPTS) { $opts += $env:WIN_OPTS.Split(' ') }
+          foreach ($t in @('base') + $env:VARIANTS.Split(' ')) {
+            & "$t\PCbuild\build.bat" -p $plat -c Release --no-tkinter @opts *> "build-$t.log"
+            if ($LASTEXITCODE -ne 0) { Get-Content "build-$t.log" -Tail 60; exit 1 }
+            "built $t"
+          }
+
+      - name: Relink at each placement
+        shell: pwsh
+        run: |
+          $plat = if ($env:RUNNER_ARCH -eq 'ARM64') { 'ARM64' } else { 'x64' }
+          $config = if ($env:BENCH_BUILD -eq 'pgo') { 'PGUpdate' } else { 'Release' }
+          foreach ($t in @('base') + $env:VARIANTS.Split(' ')) {
+            python harness/windows/win_relink.py $t $env:PADS.Split(' ') --plat $plat --config $config
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+          }
+
+      - name: Check each variant
+        shell: bash
+        run: |
+          arch=$([ "$RUNNER_ARCH" = ARM64 ] && echo arm64 || echo amd64)
+          for v in $VARIANTS; do
+            P=$v/PCbuild/$arch-pad0/python.exe
+            echo "== $v: $("$P" -c 'import sys; print(sys.version)')"
+            "$P" -I harness/edge_cases.py
+            "$P" -I harness/check_all.py
+          done
+
+      - name: Time every length at every placement
+        shell: bash
+        env:
+          REPLAY_CPU: "1"
+        run: |
+          arch=$([ "$RUNNER_ARCH" = ARM64 ] && echo arm64 || echo amd64)
+          mkdir -p results
+          specs=""
+          for t in base $VARIANTS; do
+            for p in $PADS; do specs="$specs ${t}_$p=$t/PCbuild/$arch-pad$p/python.exe"; done
+          done
+          python - <<'EOF' > results/meta.json
+          import json, os, platform, subprocess
+          cpu = subprocess.run(["powershell", "-NoProfile", "-Command",
+                                "(Get-CimInstance Win32_Processor).Name"],
+                               capture_output=True, text=True).stdout.strip()
+          print(json.dumps({"runner": os.environ.get("ImageOS", ""), "build": os.environ["BENCH_BUILD"],
+                            "cpu": cpu, "cpus": os.cpu_count(), "machine": platform.machine(),
+                            "pads": os.environ["PADS"], "rounds": os.environ["ROUNDS"],
+                            "variants": os.environ["VARIANTS"]}, indent=1))
+          EOF
+          cat results/meta.json
+          python harness/windows/len_layout_win.py results/layout.json $ROUNDS $specs
+          for v in $VARIANTS; do
+            python harness/windows/perlen.py base $v results/layout.json | tee -a results/perlen.txt
+            python harness/windows/summary.py base $v results/layout.json | tee -a results/summary.txt
+          done
+          summary=${GITHUB_STEP_SUMMARY:-/dev/null}
+          cpu=$(python -c "import json; print(json.load(open('results/meta.json'))['cpu'])")
+          { echo "### $cpu / $BENCH_BUILD"; echo '```'; cat results/summary.txt; echo '```'; } >> "$summary"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: winlayout-${{ matrix.os }}-${{ inputs.build }}-${{ matrix.rep }}
+          path: |
+            results/
+            *.log
+          if-no-files-found: warn
