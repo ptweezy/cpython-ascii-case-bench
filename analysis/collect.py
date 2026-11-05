@@ -99,7 +99,7 @@ def main():
             job.update(short=short, lengths=lengths(res), control=control(res), simd=simd(res))
             jobs.append(job)
     json.dump(jobs, open(prefix + ".json", "w"), indent=1)
-    trees = ["PR", "varP", "varR", "varT", "varN", "varO", "varB", "varB5", "varQ", "varS", "varU"]
+    trees = ["PR", "varP", "varR", "varT", "varN", "varO", "varB", "varB5", "cmpA", "cmpB", "cmpC", "cmpM", "varQ", "varS", "varU"]
     lines = ["| Job | Build | CPU | Tree | SIMD | 64K | 4,096 | 1,024 | 256 | 128 | 64 | 32 | 16 | short mix | control | doclower |",
              "|" + "---|" * 16]
     for j in jobs:
