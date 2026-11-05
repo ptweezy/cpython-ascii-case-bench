@@ -163,7 +163,7 @@ jobs:
           mkdir -p results
           bin=python; [ -x base/python.exe ] && bin=python.exe
           for t in base $VARIANTS; do
-            for f in ascii_case_words _Py_bytes_lower; do
+            for f in ascii_case_words ascii_case_blocks _Py_bytes_lower; do
               objdump -d --no-show-raw-insn $t/$bin 2>/dev/null \
                 | awk -v f="$f" '$0 ~ "^[0-9a-f]+ <_?" f "[.>]" {on=1; next} /^[0-9a-f]+ </ {on=0} on' > body.s
               if [ -s body.s ]; then
@@ -196,9 +196,9 @@ jobs:
               new=$(printf '%s' "$cmd" | sed "s| -o python-pad$p Programs/python.o | -o python-pad$p $PWD/pad$p.o Programs/python.o |")
               if [ "$new" = "$cmd" ]; then echo "no link line for $t: $cmd"; exit 1; fi
               (cd $t && eval "$new")
-              addrs="$addrs $(nm $t/python-pad$p | awk '/ _?ascii_case_words$/ {print $1}' | tail -c 6)"
+              addrs="$addrs $(nm $t/python-pad$p | awk '/ _?ascii_case_(words|blocks)$/ {print $1; exit}' | tail -c 6)"
             done
-            echo "$t: ascii_case_words at$addrs"
+            echo "$t: case helper at$addrs"
           done
 
       - name: Check each variant at every shift
