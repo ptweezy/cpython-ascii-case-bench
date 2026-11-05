@@ -10,7 +10,9 @@
 #
 # Environment: ROUNDS (replay rounds, default 5), LEN_ROUNDS (fixed-length
 # rounds, default 3), PADS (default below), REPLAY_CPU (Linux:
-# pin timed runs to that logical CPU), JOBS (make -j, default all CPUs).
+# pin timed runs to that logical CPU), JOBS (make -j, default all CPUs),
+# LOAD_MAX (if set, each timing phase first waits, up to 30 minutes, until
+# the 1-minute load average is below it).
 # Results: WORKDIR/results/{layout.md,lengths.md} plus the raw JSON.
 set -euo pipefail
 H=$(cd "$(dirname "$0")/.." && pwd)
@@ -88,9 +90,23 @@ for t in base $VARIANTS; do
     replay="$replay $name=$t/python-pad$p"
   done
 done
+wait_load() {
+  [ -n "${LOAD_MAX:-}" ] || return 0
+  local i l
+  for i in $(seq 120); do
+    l=$(python3 -c "import os; print(round(os.getloadavg()[0], 2))")
+    if python3 -c "import sys; sys.exit(not $l < $LOAD_MAX)"; then
+      echo "load $l, below $LOAD_MAX ($(date +%T))"; return 0
+    fi
+    sleep 15
+  done
+  echo "load still $l after 30 minutes; timing anyway ($(date +%T))"
+}
+wait_load
 echo "replay, $ROUNDS rounds ($(date +%T))"
 python3 "$H/realworld/replay_drive.py" "$H/realworld/hist" results/layout $ROUNDS $replay > results/layout-drive.txt
 python3 "$H/realworld/layout_summary.py" results/layout/times.json | tee results/layout.md
+wait_load
 echo "fixed lengths, $LEN_ROUNDS rounds ($(date +%T))"
 python3 "$H/realworld/len_layout.py" results/lengths.json $LEN_ROUNDS $lens
 python3 "$H/realworld/len_layout_summary.py" results/lengths.json | tee results/lengths.md
