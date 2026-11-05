@@ -28,6 +28,9 @@ on:
       replay_rounds:
         description: rounds of the real-world replay
         default: '5'
+      win_opts:
+        description: extra PCbuilduild.bat options on x64 Windows, e.g. --tail-call-interp (python.org's 3.15 build)
+        default: ""
 
 permissions:
   contents: read
@@ -52,6 +55,7 @@ jobs:
       BENCH_PROCS: "10"
       BENCH_SET: ${{ inputs.bench_set || 'short' }}
       VARIANTS: ${{ inputs.variants || 'varA varC varD' }}
+      WIN_OPTS: ${{ inputs.win_opts || '' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -106,6 +110,7 @@ jobs:
           $plat = if ($env:RUNNER_ARCH -eq 'ARM64') { 'ARM64' } else { 'x64' }
           $opts = @()
           if ($env:BENCH_BUILD -eq 'pgo') { $opts += '--pgo' }
+          if ($plat -eq 'x64' -and $env:WIN_OPTS) { $opts += $env:WIN_OPTS.Split(' ') }
           foreach ($t in @('base') + $env:VARIANTS.Split(' ')) {
             & "$t\PCbuild\build.bat" -p $plat -c Release --no-tkinter @opts *> "build-$t.log"
             if ($LASTEXITCODE -ne 0) { Get-Content "build-$t.log" -Tail 60; exit 1 }

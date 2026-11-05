@@ -48,6 +48,8 @@ The `variants` workflow compares several versions of the change (the patches in 
   - `cmpB` (46 lines, no `#if`) is `cmpA` with the loop form of the block for every compiler.
   - `cmpC` (56 lines) is `cmpA` with the block as two separate words (two loads into two variables) outside MSVC: in Fedora's gcc 16 PGO build `cmpA`'s two statements on an array stayed scalar, while `varX`'s separate words were vectorized.
   - `cmpD` (57 lines, one `#if`) is `cmpC` with the `#if` choosing gcc (`__GNUC__` and not `__clang__`) instead of MSVC: gcc gets the separate words, clang and MSVC the two-word array loop. It compiles to `cmpB`'s code under clang and `cmpC`'s under gcc (`tests/same_code.sh`).
+  - `cmpR` (55 lines, no `#if`) is `cmpB` with `varR`'s 64-bit setup: whole 16-byte blocks, one overlapping last block, then return; shorter strings and 32-bit targets take `cmpB`'s word loop.
+  - `PRt`, `cmpBt`, `cmpRt` and `cmpDt` are the PR, `cmpB`, `cmpR` and `cmpD` with the two proposed tests (`tests/tests.patch`), which CPython's PGO training runs.
   - `cmpM` (35 lines, no `#if`) is the PR's design made smaller: one count-by-one word loop for every compiler.
   - `cmpMi` (44 lines) is `cmpM` with the PR's MSVC-only loop kept; it compiles to the PR's loops.
   - `cmpT` (88 lines) is `varB` in fewer lines, with the same machine code on every target checked (`tests/same_code.sh`).
