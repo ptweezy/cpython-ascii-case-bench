@@ -50,6 +50,7 @@ The `variants` workflow compares several versions of the change (the patches in 
   - `cmpD` (57 lines, one `#if`) is `cmpC` with the `#if` choosing gcc (`__GNUC__` and not `__clang__`) instead of MSVC: gcc gets the separate words, clang and MSVC the two-word array loop. It compiles to `cmpB`'s code under clang and `cmpC`'s under gcc (`tests/same_code.sh`).
   - `cmpR` (55 lines, no `#if`) is `cmpB` with `varR`'s 64-bit setup: whole 16-byte blocks, one overlapping last block, then return; shorter strings and 32-bit targets take `cmpB`'s word loop.
   - `PRt`, `cmpBt`, `cmpRt` and `cmpDt` are the PR, `cmpB`, `cmpR` and `cmpD` with the two proposed tests (`tests/tests.patch`), which CPython's PGO training runs.
+  - `final` is `cmpD` with the comments and declarations revised for the PR (the same machine code with gcc, clang and MSVC x64 and x86); `finalt` is `final` with the two tests.
   - `cmpM` (35 lines, no `#if`) is the PR's design made smaller: one count-by-one word loop for every compiler.
   - `cmpMi` (44 lines) is `cmpM` with the PR's MSVC-only loop kept; it compiles to the PR's loops.
   - `cmpT` (88 lines) is `varB` in fewer lines, with the same machine code on every target checked (`tests/same_code.sh`).

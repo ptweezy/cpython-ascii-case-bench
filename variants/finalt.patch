@@ -1,0 +1,144 @@
+diff --git a/Objects/bytes_methods.c b/Objects/bytes_methods.c
+index 414afeb..8b22ae1 100644
+--- a/Objects/bytes_methods.c
++++ b/Objects/bytes_methods.c
+@@ -242,6 +242,59 @@ _Py_bytes_istitle(const char *cptr, Py_ssize_t len)
+ }
+ 
+ 
++/* Return x with 0x20 XORed into each byte in first..first+25, given
++   0x80 - first and 0x80 - first - 26 in every byte of ge and gt.  For a
++   byte b < 0x80, b + ge has its high bit set iff b >= first, and b + gt
++   iff b > first + 25; neither sum carries.  "| x" drops bytes >= 0x80. */
++static inline Py_ALWAYS_INLINE size_t
++ascii_case_conv(size_t x, size_t ge, size_t gt)
++{
++    const size_t high = (size_t)-1 / 0xff * 0x80;  /* 0x80 in every byte */
++    size_t b = x & ~high;
++    return x ^ (((b + ge) & ~((b + gt) | x) & high) >> 2);
++}
++
++/* Requires len >= SIZEOF_SIZE_T.  64-bit targets first take 16-byte blocks,
++   which compilers vectorize even where PGO optimizes this code for size,
++   then at most one word.  The last word may overlap the one before it
++   (harmless).  Not inlined, so that short strings skip its setup. */
++static Py_NO_INLINE void
++ascii_case_words(char *result, const char *cptr, Py_ssize_t len, int first)
++{
++    const size_t ones = (size_t)-1 / 0xff;  /* 0x01 in every byte */
++    size_t ge = (0x80 - first) * ones, gt = (0x80 - first - 26) * ones;
++    size_t m = SIZEOF_SIZE_T == 8 ? (size_t)(len - 1) / 16 * 16 : 0;
++    size_t w;
++    for (size_t i = 0; i < m; i += 16) {
++#if defined(__GNUC__) && !defined(__clang__)
++        /* gcc 16 vectorizes only this form under PGO */
++        size_t x, y;
++        memcpy(&x, cptr + i, sizeof(x));
++        memcpy(&y, cptr + i + sizeof(x), sizeof(y));
++        x = ascii_case_conv(x, ge, gt);
++        y = ascii_case_conv(y, ge, gt);
++        memcpy(result + i, &x, sizeof(x));
++        memcpy(result + i + sizeof(x), &y, sizeof(y));
++#else  /* MSVC and Apple clang vectorize only this form */
++        size_t x[2];
++        memcpy(x, cptr + i, sizeof(x));
++        for (int k = 0; k < 2; k++) {
++            x[k] = ascii_case_conv(x[k], ge, gt);
++        }
++        memcpy(result + i, x, sizeof(x));
++#endif
++    }
++    size_t n = (size_t)(len - 1) / SIZEOF_SIZE_T;  /* counts by one for MSVC */
++    for (size_t i = m / SIZEOF_SIZE_T; i < n; i++) {
++        memcpy(&w, cptr + i * SIZEOF_SIZE_T, sizeof(w));
++        w = ascii_case_conv(w, ge, gt);
++        memcpy(result + i * SIZEOF_SIZE_T, &w, sizeof(w));
++    }
++    memcpy(&w, cptr + len - SIZEOF_SIZE_T, sizeof(w));
++    w = ascii_case_conv(w, ge, gt);
++    memcpy(result + len - SIZEOF_SIZE_T, &w, sizeof(w));
++}
++
+ PyDoc_STRVAR_shared(_Py_lower__doc__,
+ "B.lower() -> copy of B\n\
+ \n\
+@@ -252,6 +305,10 @@ _Py_bytes_lower(char *result, const char *cptr, Py_ssize_t len)
+ {
+     Py_ssize_t i;
+ 
++    if (len >= SIZEOF_SIZE_T) {
++        ascii_case_words(result, cptr, len, 'A');
++        return;
++    }
+     for (i = 0; i < len; i++) {
+         result[i] = Py_TOLOWER((unsigned char) cptr[i]);
+     }
+@@ -268,6 +325,10 @@ _Py_bytes_upper(char *result, const char *cptr, Py_ssize_t len)
+ {
+     Py_ssize_t i;
+ 
++    if (len >= SIZEOF_SIZE_T) {
++        ascii_case_words(result, cptr, len, 'a');
++        return;
++    }
+     for (i = 0; i < len; i++) {
+         result[i] = Py_TOUPPER((unsigned char) cptr[i]);
+     }
+diff --git a/Lib/test/string_tests.py b/Lib/test/string_tests.py
+--- a/Lib/test/string_tests.py
++++ b/Lib/test/string_tests.py
+@@ -458,6 +458,22 @@
+         self.checkequal('HELLO', 'HELLO', 'upper')
+         self.checkraises(TypeError, 'hello', 'upper', 42)
+ 
++    def test_lower_upper_long(self):
++        # gh-161155: lower() and upper() convert ASCII strings several
++        # characters at a time.  Put a letter or a character next to the
++        # letter ranges at every position of strings around those sizes.
++        lengths = [*range(1, 41), 63, 64, 65, 1000]
++        for n in lengths:
++            positions = range(n) if n < 100 else [*range(20), *range(n - 20, n)]
++            for i in positions:
++                for c in 'AZaz@[`{':
++                    s = '0' * i + c + '9' * (n - i - 1)
++                    self.checkequal(s[:i] + c.lower() + s[i+1:], s, 'lower')
++                    self.checkequal(s[:i] + c.upper() + s[i+1:], s, 'upper')
++        s = 'Hello, World! ' * 10
++        self.checkequal('hello, world! ' * 10, s, 'lower')
++        self.checkequal('HELLO, WORLD! ' * 10, s, 'upper')
++
+     def test_expandtabs(self):
+         self.checkequal('abc\rab      def\ng       hi', 'abc\rab\tdef\ng\thi',
+                         'expandtabs')
+diff --git a/Lib/test/test_bytes.py b/Lib/test/test_bytes.py
+--- a/Lib/test/test_bytes.py
++++ b/Lib/test/test_bytes.py
+@@ -1209,6 +1209,28 @@
+             _testlimitedcapi.sequence_getitem(obj, 1)
+         self.assertEqual(_testlimitedcapi.sequence_getitem(obj, 0), 42)
+ 
++    def test_lower_upper_every_byte(self):
++        # gh-161155: every byte value at every position of lengths around
++        # the 8 and 16 bytes that lower() and upper() convert at once,
++        # including unaligned bytearrays.
++        lo = b'abcdefghijklmnopqrstuvwxyz'
++        up = lo.upper()
++        to_lower = bytes.maketrans(up, lo)
++        to_upper = bytes.maketrans(lo, up)
++        bg = b'aZ@[`{zA\x80\xc1\xda\xe1\xfa\xff\x7f\x00' * 3
++        for n in (7, 8, 9, 15, 16, 17, 31, 32, 33):
++            for i in range(n):
++                for v in range(256):
++                    b = self.type2test(bg[:i] + bytes([v]) + bg[i+1:n])
++                    self.assertEqual(b.lower(), b.translate(to_lower))
++                    self.assertEqual(b.upper(), b.translate(to_upper))
++        data = bytes(range(256)) * 2
++        for k in range(16):
++            b = bytearray(k) + data
++            del b[:k]  # moves the start of the buffer
++            self.assertEqual(b.lower(), data.translate(to_lower))
++            self.assertEqual(b.upper(), data.translate(to_upper))
++
+ 
+ class BytesTest(BaseBytesTest, unittest.TestCase):
+     type2test = bytes
