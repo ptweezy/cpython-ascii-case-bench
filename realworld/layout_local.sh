@@ -100,7 +100,7 @@ wait_load() {
     l=$(python3 -c "import os; print(round(os.getloadavg()[0], 2))")
     th=""  # macOS thermal pressure level; 0 is nominal
     if command -v notifyutil > /dev/null 2>&1; then
-      th=$(notifyutil -g com.apple.system.thermalpressurelevel 2>/dev/null | awk '{print $NF}')
+      th=$(notifyutil -g com.apple.system.thermalpressurelevel 2>/dev/null | awk '{print $NF}' || true)
     fi
     if python3 -c "import sys; sys.exit(not $l < $LOAD_MAX)" && { [ -z "$th" ] || [ "$th" = 0 ]; }; then
       ok=$((ok + 1))
