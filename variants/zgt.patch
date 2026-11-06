@@ -1,0 +1,225 @@
+diff --git a/Lib/test/test_bytes.py b/Lib/test/test_bytes.py
+index 9c36fbe..f63a742 100644
+--- a/Lib/test/test_bytes.py
++++ b/Lib/test/test_bytes.py
+@@ -1209,6 +1209,30 @@ def test_sq_item(self):
+             _testlimitedcapi.sequence_getitem(obj, 1)
+         self.assertEqual(_testlimitedcapi.sequence_getitem(obj, 0), 42)
+ 
++    @support.skip_if_pgo_task
++    def test_lower_upper_every_byte(self):
++        # gh-161155: every byte value at every position of lengths around
++        # the words and 16-byte blocks that lower() and upper() convert at
++        # once on some 64-bit platforms, including unaligned bytearrays.
++        lo = b'abcdefghijklmnopqrstuvwxyz'
++        up = b'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
++        to_lower = bytes.maketrans(up, lo)
++        to_upper = bytes.maketrans(lo, up)
++        bg = b'aZ@[`{zA\x80\xc1\xda\xe1\xfa\xff\x7f\x00' * 3
++        for n in (*range(1, 9), 15, 16, 17, 31, 32, 33):
++            b = self.type2test(bg[:n])
++            self.assertEqual(b.capitalize(), b'A' + b[1:].translate(to_lower))
++            for r in range(256):
++                b = self.type2test((r + c) % 256 for c in bg[:n])
++                self.assertEqual(b.lower(), b.translate(to_lower))
++                self.assertEqual(b.upper(), b.translate(to_upper))
++        data = bytes(range(256)) * 2
++        for k in range(16):
++            b = bytearray(k) + data
++            del b[:k]  # moves the start of the buffer
++            self.assertEqual(b.lower(), data.translate(to_lower))
++            self.assertEqual(b.upper(), data.translate(to_upper))
++
+ 
+ class BytesTest(BaseBytesTest, unittest.TestCase):
+     type2test = bytes
+diff --git a/Lib/test/test_str.py b/Lib/test/test_str.py
+index bef0e62..234b587 100644
+--- a/Lib/test/test_str.py
++++ b/Lib/test/test_str.py
+@@ -954,6 +954,18 @@ def test_upper(self):
+         self.assertEqual('\U0008fffe'.upper(), '\U0008fffe')
+         self.assertEqual('\u2177'.upper(), '\u2167')
+ 
++    @support.skip_if_pgo_task
++    def test_lower_upper_ascii(self):
++        # gh-161155: lower() and upper() convert ASCII strings several
++        # characters at a time.  Put a letter or a character next to the
++        # letter ranges at every position of strings around those sizes.
++        for n in (*range(1, 9), 15, 16, 17, 31, 32, 33):
++            for i in range(n):
++                for c in 'AZaz@[`{':
++                    s = '0' * i + c + '9' * (n - i - 1)
++                    self.assertEqual(s.lower(), s[:i] + c.lower() + s[i+1:])
++                    self.assertEqual(s.upper(), s[:i] + c.upper() + s[i+1:])
++
+     def test_capitalize(self):
+         string_tests.StringLikeTest.test_capitalize(self)
+         self.assertEqual('\U0001044F'.capitalize(), '\U00010427')
+diff --git a/Misc/NEWS.d/next/Core_and_Builtins/2026-11-02-05-27-54.gh-issue-161155.xXLPBV.rst b/Misc/NEWS.d/next/Core_and_Builtins/2026-11-02-05-27-54.gh-issue-161155.xXLPBV.rst
+new file mode 100644
+index 0000000..c279f76
+--- /dev/null
++++ b/Misc/NEWS.d/next/Core_and_Builtins/2026-11-02-05-27-54.gh-issue-161155.xXLPBV.rst
+@@ -0,0 +1,5 @@
++Speed up :meth:`str.lower`, :meth:`str.upper` and :meth:`str.casefold` for
++ASCII strings, and :meth:`bytes.lower`, :meth:`bytes.upper` and
++:meth:`bytes.capitalize` (also on :class:`bytearray`), by converting several
++bytes at a time in x86-64 builds made with GCC or clang.
++Patch by Parker Loflin.
+diff --git a/Objects/bytes_methods.c b/Objects/bytes_methods.c
+index 414afeb..f675b06 100644
+--- a/Objects/bytes_methods.c
++++ b/Objects/bytes_methods.c
+@@ -242,6 +242,119 @@ _Py_bytes_istitle(const char *cptr, Py_ssize_t len)
+ }
+ 
+ 
++/* Only GCC and clang on x86-64: MSVC stops inlining _Py_bytes_lower() into
++   its callers, aarch64 needs more instructions for short strings, riscv64
++   has slow unaligned loads, and 32-bit targets lack 64-bit registers. */
++#if defined(__GNUC__) && defined(__x86_64__)
++#define USE_ASCII_CASE
++/* Return x with 0x20 XORed into each byte valued first..first+25, given
++   0x80 - first and 0x80 - first - 26 in every byte of ge and gt.  For a
++   byte b < 0x80, b + ge has its high bit set iff b >= first, and b + gt
++   iff b > first + 25; neither sum carries.  "| x" drops bytes >= 0x80. */
++static inline Py_ALWAYS_INLINE uint64_t
++ascii_case_conv(uint64_t x, uint64_t ge, uint64_t gt)
++{
++    uint64_t b = x & 0x7f7f7f7f7f7f7f7fULL;
++    return x ^ (((b + ge) & ~((b + gt) | x) & 0x8080808080808080ULL) >> 2);
++}
++
++/* Convert len >= 16 bytes in 16-byte blocks, the last one ending at len.
++   gcc 16 with PGO vectorizes a block only as separate words, and clang with
++   _FORTIFY_SOURCE only as an array. */
++static Py_NO_INLINE void
++ascii_case_blocks(char *result, const char *cptr, Py_ssize_t len, uint64_t ge)
++{
++    uint64_t gt = ge - 26 * 0x0101010101010101ULL;
++    for (Py_ssize_t i = 0; ; i += 16) {
++        if (i > len - 16) {
++            if (i == len) {
++                break;
++            }
++            i = len - 16;
++        }
++#ifdef __clang__
++        uint64_t x[2];
++        memcpy(x, cptr + i, 16);
++        x[0] = ascii_case_conv(x[0], ge, gt);
++        x[1] = ascii_case_conv(x[1], ge, gt);
++        memcpy(result + i, x, 16);
++#else
++        uint64_t x, y;
++        memcpy(&x, cptr + i, 8);
++        memcpy(&y, cptr + i + 8, 8);
++        x = ascii_case_conv(x, ge, gt);
++        y = ascii_case_conv(y, ge, gt);
++        memcpy(result + i, &x, 8);
++        memcpy(result + i + 8, &y, 8);
++#endif
++    }
++}
++
++/* Convert 8 <= len < 16 bytes as two overlapping words. */
++static Py_NO_INLINE void
++ascii_case_words(char *result, const char *cptr, Py_ssize_t len, uint64_t ge)
++{
++    uint64_t gt = ge - 26 * 0x0101010101010101ULL;
++    uint64_t x, y;
++    memcpy(&x, cptr, 8);
++    memcpy(&y, cptr + len - 8, 8);
++    x = ascii_case_conv(x, ge, gt);
++    y = ascii_case_conv(y, ge, gt);
++    memcpy(result, &x, 8);
++    memcpy(result + len - 8, &y, 8);
++}
++
++/* Convert len >= 6 bytes: up to 7 as one word made of two overlapping
++   halves, up to 15 as two overlapping words, longer ones in 16-byte blocks. */
++static Py_NO_INLINE void
++ascii_case_long(char *result, const char *cptr, Py_ssize_t len, uint64_t ge)
++{
++    uint64_t gt = ge - 26 * 0x0101010101010101ULL;
++    if (len < 8) {
++        uint32_t a, b;
++        memcpy(&a, cptr, 4);
++        memcpy(&b, cptr + len - 4, 4);
++        uint64_t x = ascii_case_conv(a | ((uint64_t)b << 32), ge, gt);
++        memcpy(result, &x, 4);
++        memcpy(result + len - 4, (char *)&x + 4, 4);
++        return;
++    }
++    if (len >= 16) {
++        ascii_case_blocks(result, cptr, len, ge);
++        return;
++    }
++    ascii_case_words(result, cptr, len, ge);
++}
++
++/* Convert len bytes, given 0x80 - 'A' or 0x80 - 'a' in every byte of ge and
++   the Py_TOLOWER() or Py_TOUPPER() table: up to 5 one at a time, no loop. */
++static inline Py_ALWAYS_INLINE void
++ascii_case(char *result, const char *cptr, Py_ssize_t len, uint64_t ge,
++           const unsigned char (*table)[256])
++{
++    if (len > 0) {
++        if (len >= 6) {
++            ascii_case_long(result, cptr, len, ge);
++            return;
++        }
++        result[0] = (*table)[(unsigned char)cptr[0]];
++        if (len > 1) {
++            result[1] = (*table)[(unsigned char)cptr[1]];
++            if (len > 2) {
++                result[2] = (*table)[(unsigned char)cptr[2]];
++                if (len > 3) {
++                    result[3] = (*table)[(unsigned char)cptr[3]];
++                    if (len > 4) {
++                        result[4] = (*table)[(unsigned char)cptr[4]];
++                    }
++                }
++            }
++        }
++    }
++}
++#endif
++
++
+ PyDoc_STRVAR_shared(_Py_lower__doc__,
+ "B.lower() -> copy of B\n\
+ \n\
+@@ -250,11 +363,15 @@ Return a copy of B with all ASCII characters converted to lowercase.");
+ void
+ _Py_bytes_lower(char *result, const char *cptr, Py_ssize_t len)
+ {
++#ifdef USE_ASCII_CASE
++    ascii_case(result, cptr, len, 0x3f3f3f3f3f3f3f3fULL, &_Py_ctype_tolower);
++#else
+     Py_ssize_t i;
+ 
+     for (i = 0; i < len; i++) {
+         result[i] = Py_TOLOWER((unsigned char) cptr[i]);
+     }
++#endif
+ }
+ 
+ 
+@@ -266,11 +383,15 @@ Return a copy of B with all ASCII characters converted to uppercase.");
+ void
+ _Py_bytes_upper(char *result, const char *cptr, Py_ssize_t len)
+ {
++#ifdef USE_ASCII_CASE
++    ascii_case(result, cptr, len, 0x1f1f1f1f1f1f1f1fULL, &_Py_ctype_toupper);
++#else
+     Py_ssize_t i;
+ 
+     for (i = 0; i < len; i++) {
+         result[i] = Py_TOUPPER((unsigned char) cptr[i]);
+     }
++#endif
+ }
+ 
+ 
