@@ -1,0 +1,22 @@
+diff --git a/Objects/bytes_methods.c b/Objects/bytes_methods.c
+index 414afeb..02dd7a6 100644
+--- a/Objects/bytes_methods.c
++++ b/Objects/bytes_methods.c
+@@ -242,6 +242,17 @@ _Py_bytes_istitle(const char *cptr, Py_ssize_t len)
+ }
+ 
+ 
++/* Layout control for the bench: an unused function of about 912 bytes where
++   the word code would go, so later code moves without any change to the
++   case functions. */
++void _Py_bytes_layout_pad(void);
++void
++_Py_bytes_layout_pad(void)
++{
++    __asm__ volatile (".skip 904, 0xcc");
++}
++
++
+ PyDoc_STRVAR_shared(_Py_lower__doc__,
+ "B.lower() -> copy of B\n\
+ \n\
