@@ -196,7 +196,7 @@ jobs:
               new=$(printf '%s' "$cmd" | sed "s| -o python-pad$p Programs/python.o | -o python-pad$p $PWD/pad$p.o Programs/python.o |")
               if [ "$new" = "$cmd" ]; then echo "no link line for $t: $cmd"; exit 1; fi
               (cd $t && eval "$new")
-              addrs="$addrs $(nm $t/python-pad$p | awk '/ _?ascii_case_(words|blocks)$/ {print $1; exit}' | tail -c 6)"
+              addrs="$addrs $(nm $t/python-pad$p | awk '/ _?ascii_case_(words|blocks)$/ && !f {print $1; f=1}' | tail -c 6)"
             done
             echo "$t: case helper at$addrs"
           done

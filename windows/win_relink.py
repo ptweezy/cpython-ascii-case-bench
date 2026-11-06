@@ -115,11 +115,15 @@ def main():
         if p.returncode:
             sys.exit("link failed for pad %d:\n%s%s" % (n, p.stdout, p.stderr))
         # check: the map file lists .text$a with N bytes at the start of .text
+        # and the rest of the code right after it (the first group is .text$mn
+        # in a Release build, .text$lp00<dll> in a PGO build)
         mp = open(os.path.join(out, dllname[:-4] + ".map"), errors="replace").read()
-        m = re.search(r"0001:([0-9a-f]{8}) ([0-9a-f]{8})H \.text\$a ", mp)
-        m2 = re.search(r"0001:([0-9a-f]{8}) [0-9a-f]{8}H \.text\$mn ", mp)
-        if not m or int(m.group(1), 16) != 0 or int(m.group(2), 16) != n or int(m2.group(1), 16) != n:
-            sys.exit("pad %d: .text$a/.text$mn not where expected in the map" % n)
+        secs = [(int(o, 16), int(s, 16), name) for o, s, name in
+                re.findall(r"^ 0001:([0-9a-f]{8}) ([0-9a-f]{8})H (\S+)", mp, re.M)]
+        rest = [o for o, s, name in secs if name != ".text$a" and s]
+        if [x for x in secs if x[2] == ".text$a"] != [(0, n, ".text$a")] or min(rest) != n:
+            sys.exit("pad %d: .text$a is not alone at the start of .text:\n%s"
+                     % (n, "\n".join("%#x %#x %s" % x for x in secs[:8])))
         print("%s: %s relinked, code starts at .text+%#x" % (out, dllname, n), flush=True)
 
 
